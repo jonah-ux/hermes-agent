@@ -122,6 +122,47 @@ def test_real_user_messages_still_extracted_alongside_summary(tmp_path):
     provider.shutdown()
 
 
+def test_memory_write_replace_updates_exact_fact_in_place(tmp_path):
+    provider = _make_provider(tmp_path)
+    provider.on_memory_write("add", "memory", "signal channel is cedar")
+    before = provider._store.list_facts()
+    provider.on_memory_write(
+        "replace",
+        "memory",
+        "signal channel is cobalt",
+        metadata={"old_text": "signal channel is cedar"},
+    )
+    after = provider._store.list_facts()
+    assert len(after) == 1
+    assert after[0]["fact_id"] == before[0]["fact_id"]
+    assert after[0]["content"] == "signal channel is cobalt"
+    provider.shutdown()
+
+
+def test_memory_write_remove_deletes_exact_fact(tmp_path):
+    provider = _make_provider(tmp_path)
+    provider.on_memory_write("add", "memory", "remove this exact signal")
+    provider.on_memory_write(
+        "remove", "memory", "", metadata={"old_text": "remove this exact signal"}
+    )
+    assert provider._store.list_facts() == []
+    provider.shutdown()
+
+
+@pytest.mark.parametrize("action", ["replace", "remove"])
+def test_memory_write_change_without_exact_old_fact_fails_closed(tmp_path, action):
+    provider = _make_provider(tmp_path)
+    with pytest.raises(ValueError, match="exactly one old_text match"):
+        provider.on_memory_write(
+            action,
+            "memory",
+            "replacement" if action == "replace" else "",
+            metadata={"old_text": "missing fact"},
+        )
+    assert provider._store.list_facts() == []
+    provider.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # is_compaction_summary_message — public helper contract
 # ---------------------------------------------------------------------------

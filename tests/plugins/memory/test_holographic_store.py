@@ -13,6 +13,7 @@ a failed write.
 
 import sqlite3
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -46,6 +47,18 @@ def db_path(tmp_path):
 
 
 class TestSharedConnection:
+    def test_plaintext_database_and_sidecars_are_owner_only(self, db_path):
+        store = MemoryStore(db_path)
+        try:
+            store.add_fact("private user preference")
+            store._secure_store_files()
+            paths = [db_path, Path(f"{db_path}-wal"), Path(f"{db_path}-shm")]
+            observed = [path for path in paths if path.exists()]
+            assert observed
+            assert all(path.stat().st_mode & 0o777 == 0o600 for path in observed)
+        finally:
+            store.close()
+
     def test_same_path_shares_one_connection(self, db_path):
         a = MemoryStore(db_path)
         b = MemoryStore(db_path)
@@ -224,4 +237,3 @@ class TestProviderShutdown:
 
         assert provider._store is None
         assert MemoryStore._shared == {}
-
