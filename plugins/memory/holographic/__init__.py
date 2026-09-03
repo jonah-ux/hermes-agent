@@ -242,14 +242,42 @@ class HolographicMemoryProvider(MemoryProvider):
             return
         self._auto_extract_facts(messages)
 
-    def on_memory_write(self, action: str, target: str, content: str) -> None:
+    def on_memory_write(
+        self, action: str, target: str, content: str, metadata: dict | None = None
+    ) -> None:
         """Mirror built-in memory writes as facts."""
-        if action == "add" and self._store and content:
-            try:
+        if not self._store:
+            return
+        try:
+            if action == "add" and content:
                 category = "user_pref" if target == "user" else "general"
                 self._store.add_fact(content, category=category)
-            except Exception as e:
-                logger.debug("Holographic memory_write mirror failed: %s", e)
+                return
+            if action not in {"replace", "remove"}:
+                return
+            old_text = str((metadata or {}).get("old_text") or "").strip()
+            if not old_text:
+                raise ValueError(f"holographic {action} requires metadata.old_text")
+            with self._store._lock:
+                rows = self._store._conn.execute(
+                    "SELECT fact_id FROM facts WHERE content = ? ORDER BY fact_id",
+                    (old_text,),
+                ).fetchall()
+            if len(rows) != 1:
+                raise ValueError(
+                    f"holographic {action} requires exactly one old_text match; observed={len(rows)}"
+                )
+            fact_id = int(rows[0]["fact_id"])
+            if action == "replace":
+                if not content:
+                    raise ValueError("holographic replace requires replacement content")
+                if not self._store.update_fact(fact_id, content=content):
+                    raise ValueError("holographic replace lost its resolved fact")
+            elif not self._store.remove_fact(fact_id):
+                raise ValueError("holographic remove lost its resolved fact")
+        except Exception as e:
+            logger.warning("Holographic memory_write mirror failed closed: %s", e)
+            raise
 
     def shutdown(self) -> None:
         # Release the shared SQLite connection deterministically on the

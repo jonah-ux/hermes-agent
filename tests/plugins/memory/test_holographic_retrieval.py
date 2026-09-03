@@ -95,6 +95,21 @@ def test_prefetch_recovers_prose_query(retriever_with_facts):
     assert "deployment rollback" in results[0]["content"].lower()
 
 
+def test_search_records_only_returned_facts_as_retrieved(retriever_with_facts):
+    """Hybrid retrieval must leave durable evidence of actual recall."""
+    results = retriever_with_facts.search("deployment rollback", limit=1)
+    assert len(results) == 1
+    assert results[0]["retrieval_count"] == 1
+
+    with retriever_with_facts.store._lock:
+        rows = retriever_with_facts.store._conn.execute(
+            "SELECT content, retrieval_count FROM facts ORDER BY fact_id"
+        ).fetchall()
+    counts = {row["content"]: row["retrieval_count"] for row in rows}
+    assert counts[results[0]["content"]] == 1
+    assert sum(counts.values()) == 1
+
+
 
 
 # ---------------------------------------------------------------------------

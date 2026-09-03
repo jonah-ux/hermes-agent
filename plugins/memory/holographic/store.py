@@ -163,6 +163,7 @@ class MemoryStore:
             if not self._entry["ready"]:
                 self._init_db()
                 self._entry["ready"] = True
+            self._secure_store_files()
 
     # ------------------------------------------------------------------
     # Initialisation
@@ -181,6 +182,13 @@ class MemoryStore:
         if "hrr_vector" not in columns:
             self._conn.execute("ALTER TABLE facts ADD COLUMN hrr_vector BLOB")
         self._conn.commit()
+
+    def _secure_store_files(self) -> None:
+        """Keep plaintext memory and SQLite sidecars private to the owner."""
+        for suffix in ("", "-wal", "-shm"):
+            path = Path(f"{self._key}{suffix}")
+            if path.is_file() and not path.is_symlink():
+                os.chmod(path, 0o600)
 
     # ------------------------------------------------------------------
     # Public API

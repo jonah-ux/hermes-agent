@@ -116,6 +116,22 @@ class FactRetriever:
         # Sort by score descending, return top limit
         scored.sort(key=lambda x: x["score"], reverse=True)
         results = scored[:limit]
+        # This is the provider's normal prefetch path.  MemoryStore.search_facts
+        # records retrievals too, but FactRetriever bypasses that helper to do
+        # hybrid reranking; without an equivalent write here every real recall
+        # remained permanently indistinguishable from an unused fact.
+        if results:
+            ids = [fact["fact_id"] for fact in results]
+            placeholders = ",".join("?" * len(ids))
+            with self.store._lock:
+                self.store._conn.execute(
+                    f"UPDATE facts SET retrieval_count = retrieval_count + 1 "
+                    f"WHERE fact_id IN ({placeholders})",
+                    ids,
+                )
+                self.store._conn.commit()
+            for fact in results:
+                fact["retrieval_count"] = int(fact.get("retrieval_count") or 0) + 1
         # Strip raw HRR bytes — callers expect JSON-serializable dicts
         for fact in results:
             fact.pop("hrr_vector", None)
