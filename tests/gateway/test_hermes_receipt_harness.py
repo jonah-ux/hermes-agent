@@ -220,10 +220,6 @@ def test_swapped_content_digest_cannot_replay_target_receipt(
     assert len(calls) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="delivery fingerprint does not bind message_id to the idempotency key",
-)
 def test_swapped_message_id_cannot_replay_target_receipt(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -237,10 +233,6 @@ def test_swapped_message_id_cannot_replay_target_receipt(
     assert len(calls) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="delivery fingerprint omits the Desktop target_connection binding",
-)
 def test_swapped_target_connection_cannot_replay_target_receipt(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
