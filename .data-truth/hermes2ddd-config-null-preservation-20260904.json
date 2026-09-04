@@ -1,7 +1,7 @@
 {
   "version": "data-truth-change/v1",
   "canonical_project": "jonah-ux/hermes-agent",
-  "reviewed_base": "7c0604efa7153e964c978db18eaf979cb4902a6e",
+  "reviewed_base": "afc3d9d34c9c3b01fa2e1332d2c66a5b5fabae3f",
   "source_commit": "57f57f4ac22da037f7ddea03fae141df3de10310",
   "change_scope": "SOURCE_TEST_DOCS_DATA_TRUTH_MANIFEST_ONLY; no live config/auth/credentials/account reads; no runtime restart/install/deploy",
   "data_paths": [
