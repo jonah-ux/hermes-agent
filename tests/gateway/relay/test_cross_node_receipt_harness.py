@@ -363,6 +363,7 @@ def test_completed_receipt_readback_survives_fake_process_restart(
     ]
 
     restarted = gateway.restart()
+    assert restarted.generation == gateway.generation + 1
     assert [row["content"] for row in restarted.read_target_turn()] == [
         params["message"],
         "target response",
@@ -426,6 +427,10 @@ def test_stale_receipt_is_swept_before_a_fresh_delivery(
     receipt_path.write_text(json.dumps(stale_payload), encoding="utf-8")
     stale_at = time.time() - bot_relay.DELIVERY_RECEIPT_RETENTION_SECONDS - 1
     os.utime(receipt_path, (stale_at, stale_at))
+
+    replay = _deliver(gateway, monkeypatch, calls, params)
+    assert replay["replayed"] is True
+    assert len(calls) == 1
 
     swept = bot_relay._sweep_stale(bot_relay.relay_root(gateway.home), now=time.time())
     assert swept == 1
