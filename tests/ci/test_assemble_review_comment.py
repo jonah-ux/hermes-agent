@@ -181,6 +181,17 @@ def test_render_pending_notif():
     assert "<sub>Still running 1 job: `ci-timings`</sub>" in body
 
 
+def test_non_blocking_items_still_show_all_good_banner():
+    """Per docstring: info-only results (no error/action_required/warning)
+    must still show the 'all good!' banner at the top, with the info item
+    rendered below it — not just when items is empty."""
+    items = [ReviewItem(severity="info", title="lockfile", summary="No changes.")]
+    body = _mod.render_comment(items)
+    assert "all good!" in body
+    assert "### lockfile" in body
+    assert body.index("all good!") < body.index("### lockfile")
+
+
 # ─── render_comment (waiting for jobs to start) ───────────────────────
 
 
