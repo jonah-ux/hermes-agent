@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import PureWindowsPath
 from unittest.mock import MagicMock, patch
 
@@ -234,4 +235,37 @@ class TestSetupTelegramAuto:
                 PureWindowsPath(r"C:\Users\test\AppData\Local\hermes\profiles\oracle")
             )
             == "oracle"
+        )
+
+
+class TestPluginCompatBlockHasNoDuplicateImports:
+    """Regression test for a copy-paste artifact in the auto-generated
+    PLUGIN-COMPAT block (see COMPAT_MANIFEST.md): the Sep 2026 decomposition
+    tooling duplicated ``import secrets`` and ``import urllib.parse`` verbatim
+    in this module's compat block while every sibling module got a clean,
+    non-duplicated import list. Python silently no-ops a duplicate top-level
+    import at runtime, so nothing failed loudly — this only showed up as a
+    ruff F811 redefinition finding. Assert directly against the source text
+    so the specific bug class (duplicate import lines inside the compat
+    block) cannot silently reappear.
+    """
+
+    def test_compat_block_imports_are_unique(self):
+        import hermes_cli.telegram_managed_bot as module
+
+        source = inspect.getsource(module)
+        start = source.index("BEGIN PLUGIN-COMPAT")
+        end = source.index("END PLUGIN-COMPAT", start)
+        block = source[start:end]
+
+        import_lines = [
+            line.strip()
+            for line in block.splitlines()
+            if line.strip().startswith(("import ", "from "))
+        ]
+
+        assert import_lines, "expected at least one import in the compat block"
+        assert len(import_lines) == len(set(import_lines)), (
+            "duplicate import line(s) found in the PLUGIN-COMPAT block: "
+            f"{import_lines}"
         )
