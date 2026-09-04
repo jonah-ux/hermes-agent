@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -3066,6 +3067,19 @@ class TestInboundMediaAuthorizationGate:
         for index in range(6):
             part = f"private-{index}-" + ("x" * 150)
             private_parts.append(part)
+            parent = parent / part
+        try:
+            path_max = os.pathconf(str(tmp_path), "PC_PATH_MAX")
+        except (OSError, ValueError, AttributeError):
+            path_max = None
+        if path_max is not None and len(str(parent)) > path_max:
+            pytest.skip(
+                f"synthetic path ({len(str(parent))} chars) exceeds this filesystem's "
+                f"PC_PATH_MAX ({path_max}); env-only (macOS tmp PATH_MAX is 1024 vs "
+                "Linux's 4096), not a redaction bug"
+            )
+        parent = tmp_path
+        for part in private_parts:
             parent = parent / part
             parent.mkdir()
         media = parent / "handoff.txt"
