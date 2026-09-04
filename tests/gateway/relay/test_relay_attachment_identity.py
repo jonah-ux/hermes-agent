@@ -1,16 +1,18 @@
-"""Adversarial relay-receipt fixtures for candidate2ddd.
+"""Supported relay identity regressions for candidate2ddd.
 
 These tests exercise the existing Desktop-to-gateway relay boundary with
 synthetic metadata only.  They never open media, contact a peer, or start a
-real Hermes process.  The strict ``xfail`` cases are deliberate: they are
-owner-facing regression tests for the identity fields that the current
-implementation drops or omits from its delivery fingerprint.  When the
-owner fixes the binding, an unexpected pass turns this file red until the
-``xfail`` marker is removed.
+real Hermes process.
 
-The target-profile case is a normal passing test.  It records the important
-negative finding from the investigation: swapping the explicit target
-profile is already rejected, so this lane must not claim a profile defect.
+Canonical contract note: the supported v2 relay identity is the message
+payload plus the declared message/target identity (message ID, idempotency
+key, target connection, target profile, and target handle).  Attachment
+metadata, an attachment list, and ``content_digest`` are not fields in the
+sender's ``RelayEnvelope`` and are ignored when an adversarial caller adds
+them.  The earlier hypothesis that swapping those unsupported fields should
+conflict is therefore refuted; this file records that they replay the same
+semantic delivery exactly once.  The supported message and target identity
+swap cases are the regression consumer for the relay owner branch/CI.
 """
 
 from __future__ import annotations
@@ -27,24 +29,24 @@ from tools import bot_relay
 
 MESSAGE = "inspect the synthetic relay artifact"
 IDEMPOTENCY_KEY = "candidate2ddd:relay:message-1"
-CONTENT_DIGEST_A = "sha256:" + ("a" * 64)
-CONTENT_DIGEST_B = "sha256:" + ("b" * 64)
-ATTACHMENT_METADATA_A = {
+UNSUPPORTED_CONTENT_DIGEST_A = "sha256:" + ("a" * 64)
+UNSUPPORTED_CONTENT_DIGEST_B = "sha256:" + ("b" * 64)
+UNSUPPORTED_ATTACHMENT_METADATA_A = {
     "name": "plan-a.txt",
     "kind": "file",
     "size": 11,
     "sha256": "a" * 64,
 }
-ATTACHMENT_METADATA_B = {
+UNSUPPORTED_ATTACHMENT_METADATA_B = {
     "name": "plan-b.txt",
     "kind": "file",
     "size": 17,
     "sha256": "b" * 64,
 }
-ATTACHMENTS_A = [
+UNSUPPORTED_ATTACHMENTS_A = [
     {"name": "plan-a.txt", "kind": "file", "sha256": "a" * 64}
 ]
-ATTACHMENTS_B = [
+UNSUPPORTED_ATTACHMENTS_B = [
     {"name": "plan-b.txt", "kind": "file", "sha256": "b" * 64}
 ]
 
@@ -67,11 +69,12 @@ def _relay_params(
     profile: str = "ops",
     target_connection: str = "connection-a",
     message_id: str = "a" * 32,
-    attachment_metadata: dict = ATTACHMENT_METADATA_A,
-    attachments: list[dict] = ATTACHMENTS_A,
-    content_digest: str = CONTENT_DIGEST_A,
+    message: str = MESSAGE,
+    attachment_metadata: dict = UNSUPPORTED_ATTACHMENT_METADATA_A,
+    attachments: list[dict] = UNSUPPORTED_ATTACHMENTS_A,
+    content_digest: str = UNSUPPORTED_CONTENT_DIGEST_A,
 ) -> dict:
-    """Build one valid v2 envelope with optional identity mutations."""
+    """Build one valid v2 envelope with supported and ignored fields."""
 
     envelope = {
         "schema": "asm-hermes-a2a-envelope/v2",
@@ -82,7 +85,7 @@ def _relay_params(
         "to_agent": profile,
         "target_profile": profile,
         "target_connection": target_connection,
-        "message": MESSAGE,
+        "message": message,
         "scope": {"mutation": "none", "production": "none"},
         "expires_at": time.time() + 600,
         "authority_effect": "none",
@@ -92,7 +95,7 @@ def _relay_params(
     }
     return {
         "profile": profile,
-        "message": MESSAGE,
+        "message": message,
         "message_id": message_id,
         "idempotency_key": IDEMPOTENCY_KEY,
         "envelope_schema": envelope["schema"],
@@ -135,20 +138,18 @@ def _assert_idempotency_conflict(response: dict) -> None:
     assert response["error"]["data"]["reason"] == "idempotency_conflict", response
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="relay enqueue currently drops attachment metadata, attachments, and content_digest",
-)
-def test_enqueue_preserves_content_identity_metadata(home: Path) -> None:
+def test_enqueue_ignores_unsupported_attachment_metadata(home: Path) -> None:
+    """Unsupported attachment-shaped metadata is not part of the relay envelope."""
+
     target = {
         "profile": "ops",
         "handle": "ops",
         "connection_id": "connection-a",
     }
-    expected = {
-        "attachment_metadata": ATTACHMENT_METADATA_A,
-        "attachments": ATTACHMENTS_A,
-        "content_digest": CONTENT_DIGEST_A,
+    unsupported = {
+        "attachment_metadata": UNSUPPORTED_ATTACHMENT_METADATA_A,
+        "attachments": UNSUPPORTED_ATTACHMENTS_A,
+        "content_digest": UNSUPPORTED_CONTENT_DIGEST_A,
     }
     envelope = bot_relay.enqueue_envelope(
         home,
@@ -156,19 +157,15 @@ def test_enqueue_preserves_content_identity_metadata(home: Path) -> None:
         message=MESSAGE,
         sender_profile="sender",
         sender_handle="sender",
-        metadata=expected,
+        metadata=unsupported,
     )
     outbox_path = bot_relay.relay_root(home) / bot_relay.OUTBOX_DIR / f"{envelope['id']}.json"
     serialized = json.loads(outbox_path.read_text(encoding="utf-8"))
-    for field, value in expected.items():
-        assert serialized[field] == value
+    for field in unsupported:
+        assert field not in serialized
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="completed relay receipts omit attachment/content identity fields",
-)
-def test_completed_receipt_records_target_and_content_identity(
+def test_completed_receipt_records_supported_target_identity_only(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, _, receipt = _deliver_twice(
@@ -177,17 +174,16 @@ def test_completed_receipt_records_target_and_content_identity(
         _relay_params(),
         _relay_params(),
     )
+    assert receipt["message_id"] == "a" * 32
     assert receipt["target_connection"] == "connection-a"
     assert receipt["target_profile"] == "ops"
-    assert receipt["content_digest"] == CONTENT_DIGEST_A
-    assert receipt["attachment_metadata"] == ATTACHMENT_METADATA_A
+    assert receipt["target_handle"] == "ops"
+    assert "attachment_metadata" not in receipt
+    assert "attachments" not in receipt
+    assert "content_digest" not in receipt
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="delivery fingerprint omits attachment metadata and attachment identity",
-)
-def test_swapped_attachment_metadata_cannot_replay_target_receipt(
+def test_unsupported_attachment_metadata_and_digest_do_not_change_delivery_identity(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     second, calls, _ = _deliver_twice(
@@ -195,26 +191,23 @@ def test_swapped_attachment_metadata_cannot_replay_target_receipt(
         monkeypatch,
         _relay_params(),
         _relay_params(
-            attachment_metadata=ATTACHMENT_METADATA_B,
-            attachments=ATTACHMENTS_B,
+            attachment_metadata=UNSUPPORTED_ATTACHMENT_METADATA_B,
+            attachments=UNSUPPORTED_ATTACHMENTS_B,
+            content_digest=UNSUPPORTED_CONTENT_DIGEST_B,
         ),
     )
-    _assert_idempotency_conflict(second)
+    assert second["result"]["replayed"] is True, second
     assert len(calls) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="delivery fingerprint omits relayed content_digest",
-)
-def test_swapped_content_digest_cannot_replay_target_receipt(
+def test_changed_message_conflicts_with_completed_target_receipt(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     second, calls, _ = _deliver_twice(
         home,
         monkeypatch,
-        _relay_params(),
-        _relay_params(content_digest=CONTENT_DIGEST_B),
+        _relay_params(message="first supported message"),
+        _relay_params(message="second supported message"),
     )
     _assert_idempotency_conflict(second)
     assert len(calls) == 1
@@ -246,7 +239,7 @@ def test_swapped_target_connection_cannot_replay_target_receipt(
     assert len(calls) == 1
 
 
-def test_swapped_target_profile_is_already_rejected(
+def test_swapped_target_profile_conflicts_with_completed_target_receipt(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     second, calls, _ = _deliver_twice(
