@@ -4787,6 +4787,67 @@ def _import_codex_cli_tokens() -> Optional[Dict[str, str]]:
         return None
 
 
+def _resolve_fleet_codex_runtime_credentials() -> Optional[Dict[str, Any]]:
+    """Resolve the Fleet spoke publication, when this node is enrolled.
+
+    The presence of a Fleet publication is an authority signal: Hermes uses
+    the validated access-only bundle and does not fall back to its own
+    rotating OAuth store.  A missing publication means this is a normal
+    standalone Hermes install and preserves the existing resolver.
+    """
+    from agent.fleet_codex_publication import (
+        FLEET_CODEX_PUBLICATION_SOURCE,
+        FleetCodexPublicationError,
+        read_fleet_codex_publication,
+    )
+
+    try:
+        snapshot = read_fleet_codex_publication()
+    except FleetCodexPublicationError as exc:
+        raise AuthError(
+            "Fleet Codex publication is present but not valid; refusing to use "
+            "an independent Hermes refresh path.",
+            provider="openai-codex",
+            code="codex_fleet_publication_invalid",
+            relogin_required=False,
+        ) from exc
+    if not snapshot.configured:
+        return None
+    if not snapshot.credentials:
+        if snapshot.rate_limited:
+            raise AuthError(
+                "Fleet Codex pool is rate-limited; credentials remain valid and "
+                "the watchdog has no eligible account yet.",
+                provider="openai-codex",
+                code=CODEX_RATE_LIMITED_CODE,
+                relogin_required=False,
+            )
+        raise AuthError(
+            "Fleet Codex publication has no eligible account; refusing to "
+            "refresh Hermes-owned credentials.",
+            provider="openai-codex",
+            code="codex_fleet_publication_unavailable",
+            relogin_required=False,
+        )
+
+    credential = snapshot.credentials[0]
+    base_url = (
+        os.getenv("HERMES_CODEX_BASE_URL", "").strip().rstrip("/")
+        or DEFAULT_CODEX_BASE_URL
+    )
+    return {
+        "provider": "openai-codex",
+        "base_url": base_url,
+        "api_key": credential.access_token,
+        "source": FLEET_CODEX_PUBLICATION_SOURCE,
+        "last_refresh": credential.last_refresh,
+        "auth_mode": "chatgpt",
+        "fleet_account_id": credential.account_id,
+        "fleet_slot": credential.slot,
+        "fleet_publication_generated": credential.publication_generated,
+    }
+
+
 def resolve_codex_runtime_credentials(
     *,
     force_refresh: bool = False,
@@ -4804,6 +4865,10 @@ def resolve_codex_runtime_credentials(
     HTTP 401 ``Missing Authentication header`` from the wire instead of a usable
     credential. See issue #32992.
     """
+    fleet_credentials = _resolve_fleet_codex_runtime_credentials()
+    if fleet_credentials is not None:
+        return fleet_credentials
+
     read_error: Optional[AuthError] = None
     try:
         data = _read_codex_tokens()
