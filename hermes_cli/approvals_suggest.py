@@ -354,8 +354,8 @@ def parse_apply_indices(spec: str, total: int) -> list[int]:
             continue
         try:
             n = int(part)
-        except ValueError:
-            raise ValueError(f"invalid selection {part!r} — expected numbers like 1,3")
+        except ValueError as exc:
+            raise ValueError(f"invalid selection {part!r} — expected numbers like 1,3") from exc
         if n < 1 or n > total:
             raise ValueError(f"selection {n} out of range (1..{total})")
         if (n - 1) not in indices:
