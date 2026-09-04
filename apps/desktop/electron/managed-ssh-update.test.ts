@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { exec as execCallback } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -284,11 +284,21 @@ test('POSIX managed launcher executes the updater command and atomically publish
   const home = await mkdtemp(path.join(os.tmpdir(), 'hermes-managed-launch-'))
 
   try {
+    // A hardcoded '/bin/true' is not portable: it does not exist at that path on
+    // every POSIX host (this machine only has /usr/bin/true), which made the
+    // test fail with an unrelated "No such file or directory" instead of
+    // exercising buildPosixManagedUpdateLaunch. Use a self-contained
+    // always-succeeding script instead so the test has no dependency on the
+    // host's binary layout.
+    const alwaysSucceedsPath = path.join(home, 'always-succeeds')
+    await writeFile(alwaysSucceedsPath, '#!/bin/sh\nexit 0\n')
+    await chmod(alwaysSucceedsPath, 0o755)
+
     const command = buildPosixManagedUpdateLaunch(
       {
         ssh: { exec: async () => '' },
         platform: 'Linux',
-        hermesPath: '/bin/true',
+        hermesPath: alwaysSucceedsPath,
         hermesHome: home
       },
       CORRELATION

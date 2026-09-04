@@ -941,6 +941,10 @@ function BatchQuestionBlock({
 }
 
 const emptyStage = { choices: [] as string[], draft: '' }
+// Stable reference so `request?.questions ?? emptyQuestions` does not hand a fresh
+// array to useCallback/useMemo deps every render when there is no request yet —
+// a new [] literal there would defeat memoization of confirmAll below.
+const emptyQuestions: ClarifyQuestion[] = []
 
 /** Live batch card: all questions at once, staged locally, ONE confirm.
  * Picks and drafts stay in component state — nothing reaches the server
@@ -956,7 +960,7 @@ function ClarifyToolBatchPending({ onAnswered, request }: { onAnswered: () => vo
 
   // qids only exist on the gateway request — args are a hydration-race
   // fallback for display, never answerable (no ids to respond with).
-  const questions = request?.questions ?? []
+  const questions = request?.questions ?? emptyQuestions
   const ready = Boolean(request?.requestId) && questions.length > 0
 
   const [staged, setStaged] = useState<Record<string, { choices: string[]; draft: string }>>({})
