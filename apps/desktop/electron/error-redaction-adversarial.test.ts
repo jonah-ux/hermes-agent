@@ -81,7 +81,7 @@ describe('Hermes failed transport/config persistence redaction contract', () => 
       throw new Error(RAW_TRANSPORT_ERROR)
     })
 
-    if (result.ok) {
+    if (!('error' in result)) {
       throw new Error('expected gateway WS-url failure')
     }
 
