@@ -166,7 +166,7 @@ def test_enqueue_preserves_content_identity_metadata(home: Path) -> None:
 
 @pytest.mark.xfail(
     strict=True,
-    reason="completed relay receipts omit structured target/content identity fields",
+    reason="completed relay receipts omit attachment/content identity fields",
 )
 def test_completed_receipt_records_target_and_content_identity(
     home: Path, monkeypatch: pytest.MonkeyPatch
