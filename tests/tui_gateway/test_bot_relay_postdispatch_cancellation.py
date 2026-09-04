@@ -71,18 +71,11 @@ class TestPostDispatchCancellation(unittest.TestCase):
             seen: list[dict] = []
 
             def cancel_after_dispatch(
-                _command: str,
-                _label: str,
-                *,
-                task_id,
-                agent,
-                delivery_committed: bool = False,
+                command: str, **kwargs
             ) -> str:
-                seen.append({
-                    "task_id": task_id,
-                    "agent": agent,
-                    "delivery_committed": delivery_committed,
-                })
+                seen.append({"command": command, "kwargs": kwargs})
+                # Model terminal_tool's background child having been accepted while
+                # its acknowledgement is cancelled/lost to the caller.
                 raise asyncio.CancelledError("synthetic cancellation after waiter dispatch")
 
             metadata = {
@@ -92,7 +85,7 @@ class TestPostDispatchCancellation(unittest.TestCase):
             }
             result = None
             escaped = None
-            with patch.object(bot_mode_dm, "_spawn_delivery", side_effect=cancel_after_dispatch):
+            with patch("tools.terminal_tool.terminal_tool", side_effect=cancel_after_dispatch):
                 try:
                     result = bot_mode_dm._try_relay_delivery(
                         home,
@@ -111,7 +104,8 @@ class TestPostDispatchCancellation(unittest.TestCase):
                 "post-dispatch cancellation escaped instead of becoming sent_unwatched",
             )
             self.assertEqual(len(seen), 1)
-            self.assertTrue(seen[0]["delivery_committed"])
+            self.assertTrue(seen[0]["kwargs"]["background"])
+            self.assertTrue(seen[0]["kwargs"]["notify_on_complete"])
             self.assertIsInstance(result, str)
             self.assertEqual(json.loads(result)["status"], "sent_unwatched")
             queued = list((home / bot_relay.RELAY_DIR_NAME / bot_relay.OUTBOX_DIR).glob("*.json"))
