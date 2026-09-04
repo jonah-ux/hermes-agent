@@ -9,6 +9,8 @@ Tests that switch_model:
 import pytest
 from unittest.mock import MagicMock, patch
 
+anthropic = pytest.importorskip("anthropic")  # skip if optional SDK missing
+
 
 class TestSwitchModelReasoningOverride:
     """Test switch_model re-resolves reasoning_config on model switch."""

@@ -467,3 +467,14 @@ def test_generate_retries_without_transparent_background(monkeypatch, tmp_path):
     # variant skips the transparent probe entirely.
     backgrounds = [c.get("background") for c in calls]
     assert backgrounds == ["transparent", None, None]
+
+
+def test_atlas_to_webp_bytes_encodes_lossless_webp():
+    """Regression for agent/pet/generate/atlas.py duplicating `import io` (ruff F811) in its
+    PLUGIN-COMPAT block: guard that the compat shim's `io` symbol and the function that
+    depends on it (``atlas_to_webp_bytes``) actually work after de-duplicating the import."""
+    img = Image.new("RGBA", (4, 4), (10, 20, 30, 255))
+    data = atlas.atlas_to_webp_bytes(img)
+    assert isinstance(data, bytes) and data.startswith(b"RIFF") and b"WEBP" in data[:16]
+    decoded = Image.open(atlas.io.BytesIO(data))
+    assert decoded.size == (4, 4)
