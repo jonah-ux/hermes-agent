@@ -1,4 +1,4 @@
-import { type GatewayEvent, JsonRpcGatewayClient } from '@hermes/shared'
+import { type GatewayEvent, JsonRpcGatewayClient, registryBackendScopeKey } from '@hermes/shared'
 import { act, cleanup } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -19,7 +19,9 @@ const SESSION_ID = 'same-session-on-two-gateways'
 type SocketListener = (event: { data?: string }) => void
 
 class FakeSocket {
+  static CLOSED = 3
   static instances: FakeSocket[] = []
+  static OPEN = 1
 
   readyState = 0
   private readonly listeners = new Map<string, Set<SocketListener>>()
@@ -62,6 +64,8 @@ class FakeSocket {
     }
   }
 }
+
+const originalWebSocket = globalThis.WebSocket
 
 interface ConnectedGateway {
   client: JsonRpcGatewayClient
@@ -116,7 +120,15 @@ async function retainRoutedGateway(connectionId: string): Promise<RetainedGatewa
   return { release: await opening, socket }
 }
 
+interface RegistryFanInFixture {
+  gatewayA: RetainedGateway
+  gatewayB: RetainedGateway
+  observedSources: string[]
+  stream: MessageStreamHarness
+}
+
 function installRegistryDesktop(): void {
+  ;(globalThis as unknown as { WebSocket: unknown }).WebSocket = FakeSocket
   ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
     getConnectionFor: vi.fn(async ({ connectionId, profile }: { connectionId: string; profile: string }) => ({
       authMode: 'token',
@@ -131,6 +143,45 @@ function installRegistryDesktop(): void {
     ),
     touchBackend: vi.fn(async () => undefined)
   }
+}
+
+async function createRegistryFanInFixture(): Promise<RegistryFanInFixture> {
+  installRegistryDesktop()
+  const states = new Map<string, ReturnType<MessageStreamHarness['state']>>()
+  const stream = renderMessageStream(SESSION_ID, { states })
+  const observedSources: string[] = []
+
+  // Exercise the production registry boundary: retainGatewayForAgent creates
+  // the private createSecondary entries, whose real JsonRpcGatewayClient
+  // listeners call configureGatewayRegistry.onEvent. This is the same global
+  // callback installed by use-gateway-boot, not a test-created per-socket
+  // callback.
+  configureGatewayRegistry({
+    onEvent: event => {
+      observedSources.push(`${event.connectionId ?? 'unscoped'}:${String((event.payload as { text?: string })?.text)}`)
+      stream.handleEvent(event as RpcEvent)
+    }
+  })
+
+  return {
+    gatewayA: await retainRoutedGateway('gateway-a'),
+    gatewayB: await retainRoutedGateway('gateway-b'),
+    observedSources,
+    stream
+  }
+}
+
+function sendInterleavedEvents({ gatewayA, gatewayB }: RegistryFanInFixture): void {
+  act(() => {
+    gatewayA.socket.serverEvent(event('A1'))
+    gatewayB.socket.serverEvent(event('B1'))
+    gatewayA.socket.serverEvent(event('A2'))
+    gatewayB.socket.serverEvent(event('B2'))
+  })
+}
+
+function streamRouteKey(connectionId: string): string {
+  return `${registryBackendScopeKey(connectionId, 'default')}\u0000${SESSION_ID}`
 }
 
 function event(text: string): GatewayEvent {
@@ -156,6 +207,7 @@ afterEach(() => {
   cleanup()
   closeSecondaryGateways()
   FakeSocket.instances = []
+  ;(globalThis as unknown as { WebSocket: unknown }).WebSocket = originalWebSocket
   delete (window as { hermesDesktop?: unknown }).hermesDesktop
   vi.useRealTimers()
 })
@@ -222,36 +274,12 @@ describe('Electron gateway stream source routing', () => {
     offB()
   })
 
-  it.fails('isolates same-session chats through the current Electron registry fan-in', async () => {
+  it('preserves registry source identity and disposes only the requested route', async () => {
     vi.useFakeTimers()
-    installRegistryDesktop()
-    const states = new Map<string, ReturnType<MessageStreamHarness['state']>>()
-    const stream = renderMessageStream(SESSION_ID, { states })
-    const observedSources: string[] = []
+    const fixture = await createRegistryFanInFixture()
+    const { gatewayA, gatewayB, observedSources, stream } = fixture
 
-    // Exercise the production registry boundary: retainGatewayForAgent creates
-    // the private createSecondary entries, whose real JsonRpcGatewayClient
-    // listeners call configureGatewayRegistry.onEvent. This is the same global
-    // callback installed by use-gateway-boot, not a test-created per-socket
-    // callback.
-    configureGatewayRegistry({
-      onEvent: event => {
-        observedSources.push(
-          `${event.connectionId ?? 'unscoped'}:${String((event.payload as { text?: string })?.text)}`
-        )
-        stream.handleEvent(event as RpcEvent)
-      }
-    })
-
-    const gatewayA = await retainRoutedGateway('gateway-a')
-    const gatewayB = await retainRoutedGateway('gateway-b')
-
-    act(() => {
-      gatewayA.socket.serverEvent(event('A1'))
-      gatewayB.socket.serverEvent(event('B1'))
-      gatewayA.socket.serverEvent(event('A2'))
-      gatewayB.socket.serverEvent(event('B2'))
-    })
+    sendInterleavedEvents(fixture)
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(STREAM_DELTA_FLUSH_MS)
@@ -280,17 +308,30 @@ describe('Electron gateway stream source routing', () => {
       await vi.advanceTimersByTimeAsync(STREAM_DELTA_FLUSH_MS)
     })
 
-    // Desired contract: the same session id is isolated by source as well as
-    // session. On immutable 2ddd the real global consumer only has the bare
-    // session key, so these route-keyed assertions remain an expected failure.
-    expect(assistantTextFromState(stream.state('conn:gateway-a::default\u0000same-session-on-two-gateways'))).toBe(
-      'A1A2'
-    )
-    expect(assistantTextFromState(stream.state('conn:gateway-b::default\u0000same-session-on-two-gateways'))).toBe(
-      'B1B2B-after-A-unsubscribe'
-    )
+    expect(assistantText(stream)).toBe('A1B1A2B2B-after-A-unsubscribe')
 
     gatewayA.release()
     gatewayB.release()
+  })
+
+  it.fails('isolates same-session chats through the current Electron registry fan-in', async () => {
+    vi.useFakeTimers()
+    const fixture = await createRegistryFanInFixture()
+    const { stream } = fixture
+
+    sendInterleavedEvents(fixture)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STREAM_DELTA_FLUSH_MS)
+    })
+
+    // Desired contract: the same session id is isolated by source as well as
+    // session. On immutable 2ddd the real global consumer only has the bare
+    // session key, so these route-keyed assertions remain an expected failure.
+    expect(assistantTextFromState(stream.state(streamRouteKey('gateway-a')))).toBe('A1A2')
+    expect(assistantTextFromState(stream.state(streamRouteKey('gateway-b')))).toBe('B1B2')
+
+    fixture.gatewayA.release()
+    fixture.gatewayB.release()
   })
 })
