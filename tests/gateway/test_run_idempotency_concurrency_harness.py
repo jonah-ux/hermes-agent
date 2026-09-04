@@ -26,8 +26,9 @@ from typing import Any
 
 import pytest
 
+from gateway.relay.descriptor import CONTRACT_VERSION, CapabilityDescriptor
 from gateway.platforms.api_server_run_idempotency import RunIdempotencyStore
-from tests.gateway.relay.test_cross_node_receipt_harness import FakeGatewayProcess
+from tests.gateway.relay.stub_connector import StubConnector
 
 
 _SCOPE = "harness:receipt-sqlite:scope"
@@ -42,18 +43,16 @@ def _payload_digest(payload: dict[str, Any]) -> str:
 
 
 def _fake_delivery(
-    gateway: FakeGatewayProcess, payload: dict[str, Any]
+    connector: StubConnector, payload: dict[str, Any]
 ) -> dict[str, Any]:
     """Return a canonical in-memory connector ACK for a synthetic delivery."""
 
-    gateway.connector.next_send_result = {
+    connector.next_send_result = {
         "success": True,
         "message_id": payload["message_id"],
     }
     return asyncio.run(
-        gateway.connector.send_outbound(
-            {"op": "send", "content": payload["message"]}
-        )
+        connector.send_outbound({"op": "send", "content": payload["message"]})
     )
 
 
@@ -160,19 +159,28 @@ def test_simultaneous_different_deliveries_admit_only_one_reservation(
     bootstrap = RunIdempotencyStore(str(db_path))
     bootstrap.close()
 
-    fake_gateway = FakeGatewayProcess.create(tmp_path / "fake-target")
+    fake_connector = StubConnector(
+        CapabilityDescriptor(
+            contract_version=CONTRACT_VERSION,
+            platform="discord",
+            label="Hermes fake gateway",
+            max_message_length=2000,
+            supports_draft_streaming=False,
+            supports_edit=True,
+            supports_threads=True,
+            markdown_dialect="discord",
+            len_unit="chars",
+        )
+    )
     payloads = [
         {"message_id": "fake-message-a", "message": "payload alpha"},
         {"message_id": "fake-message-b", "message": "payload beta"},
     ]
-    try:
-        assert [_fake_delivery(fake_gateway, payload)["success"] for payload in payloads] == [
-            True,
-            True,
-        ]
-        results = _run_reservation_race(db_path, payloads)
-    finally:
-        fake_gateway.db.close()
+    assert [_fake_delivery(fake_connector, payload)["success"] for payload in payloads] == [
+        True,
+        True,
+    ]
+    results = _run_reservation_race(db_path, payloads)
 
     assert [result["outcome"] for result in results].count("created") == 1
     assert [result["outcome"] for result in results].count("conflict") == 1
