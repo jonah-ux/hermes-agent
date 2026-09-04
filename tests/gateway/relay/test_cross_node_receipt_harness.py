@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -177,27 +178,24 @@ def _only_receipt(gateway: FakeGatewayProcess) -> tuple[Path, dict[str, Any]]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason="candidate exposes a terminal sender ACK before a target receipt exists",
-)
 async def test_sender_ack_without_target_receipt_is_not_terminal_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A sender ACK and drained outbox do not establish target delivery."""
+    """A sender ACK and drained outbox remain pending without exact target proof."""
 
     sender = FakeGatewayProcess.create(tmp_path / "sender")
+    target = FakeGatewayProcess.create(tmp_path / "target")
     await sender.connector.connect()
     ack = await sender.connector.send_outbound({"op": "send", "content": "synthetic"})
     assert ack["success"] is True
 
-    target = {
+    target_roster = {
         "profile": "ops",
         "handle": "ops",
         "connection_id": "spark02",
         "connection_label": "Spark02",
     }
-    bot_relay.write_remote_roster(sender.home, [target])
+    bot_relay.write_remote_roster(sender.home, [target_roster])
 
     def _sender_ack(
         _command: str,
@@ -211,24 +209,79 @@ async def test_sender_ack_without_target_receipt_is_not_terminal_success(
         return json.dumps({"status": "sent"})
 
     monkeypatch.setattr(bot_mode_dm, "_spawn_delivery", _sender_ack)
-    result = json.loads(
-        bot_mode_dm._try_relay_delivery(
-            sender.home,
-            "ops",
-            "synthetic",
-            "default",
-            "hermes",
-            task_id=None,
-            agent=None,
-            metadata={"idempotency_key": "harness:sender-only"},
-        )
-        or "{}"
+    dispatch_ack = bot_mode_dm._try_relay_delivery(
+        sender.home,
+        "ops",
+        "synthetic",
+        "default",
+        task_id=None,
+        agent=None,
+        metadata={"idempotency_key": "harness:sender-only"},
     )
+    assert dispatch_ack is not None
+    assert json.loads(dispatch_ack)["status"] == "sent"
 
     claimed = bot_relay.claim_pending_envelopes(sender.home)
     assert len(claimed) == 1
     assert not list((sender.home / "bot_relay" / "outbox").glob("*.json"))
-    assert result.get("status") not in {"sent", "delivered"}
+
+    submitted: list[dict[str, Any]] = []
+
+    @contextmanager
+    def _target_db(_session: dict[str, Any]):
+        yield target.db
+
+    monkeypatch.setenv("HERMES_HOME", str(target.home))
+    monkeypatch.setattr(server, "_profile_home", lambda _name: target.home / "profiles" / "ops")
+    monkeypatch.setattr(server, "_session_db", _target_db)
+    monkeypatch.setattr(server, "LIVE_TARGET_PERSIST_TIMEOUT_SECONDS", 0.005)
+    monkeypatch.setattr(server, "LIVE_TARGET_PERSIST_POLL_SECONDS", 0.001)
+    monkeypatch.setitem(
+        server._sessions,
+        target.session_id,
+        {
+            "profile_home": str(target.home / "profiles" / "ops"),
+            "session_key": target.session_id,
+            "pending_title": "Bot Chat",
+            "history": [],
+        },
+    )
+    monkeypatch.setitem(
+        server._methods,
+        "prompt.submit",
+        lambda rid, payload: submitted.append(payload)
+        or server._ok(rid, {"status": "streaming"}),
+    )
+
+    params = _params(key="harness:sender-only-target")
+    target_result = server._methods["bot_relay.deliver"](2, params)
+    assert target_result["error"]["code"] == 4101
+    assert target_result["error"]["data"]["reason"] == "target_receipt_pending"
+    assert submitted == [{
+        "session_id": target.session_id,
+        "text": params["message"],
+        "queued": True,
+        "_relay_message_id": params["message_id"],
+    }]
+    receipt_path, receipt = _only_receipt(target)
+    assert receipt["status"] == "started"
+    assert not target.read_target_turn()
+    fingerprint = bot_relay.delivery_fingerprint(
+        params["envelope"],
+        target_profile=params["profile"],
+        message=params["message"],
+        structured=True,
+    )
+    assert bot_relay.read_idempotent_delivery(
+        target.home,
+        params["idempotency_key"],
+        message_id=params["message_id"],
+        delivery_fingerprint=fingerprint,
+        target_connection=params["envelope"]["target_connection"],
+        target_profile=params["envelope"]["target_profile"],
+        target_handle=params["envelope"]["target_handle"],
+    ) == {"disposition": "pending", "reason": "target_receipt_pending"}
+    assert receipt_path.exists()
     assert not list((sender.home / "bot_relay" / "delivered").glob("*.json"))
 
 
@@ -359,11 +412,7 @@ def test_out_of_order_completion_does_not_overwrite_newer_receipt(tmp_path: Path
     assert receipt["reply_sha256"] == hashlib.sha256(b"newer completion").hexdigest()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="candidate still replays a completed receipt after its retention age",
-)
-def test_stale_receipt_does_not_suppress_a_fresh_delivery(
+def test_stale_receipt_is_swept_before_a_fresh_delivery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     gateway = FakeGatewayProcess.create(tmp_path / "target")
@@ -378,6 +427,12 @@ def test_stale_receipt_does_not_suppress_a_fresh_delivery(
     stale_at = time.time() - bot_relay.DELIVERY_RECEIPT_RETENTION_SECONDS - 1
     os.utime(receipt_path, (stale_at, stale_at))
 
-    replay = _deliver(gateway, monkeypatch, calls, params)
-    assert replay.get("replayed") is not True
+    swept = bot_relay._sweep_stale(bot_relay.relay_root(gateway.home), now=time.time())
+    assert swept == 1
+    assert not receipt_path.exists()
+
+    fresh = _deliver(gateway, monkeypatch, calls, params)
+    assert fresh.get("replayed") is not True
     assert len(calls) == 2
+    _, fresh_receipt = _only_receipt(gateway)
+    assert fresh_receipt["status"] == "completed"
