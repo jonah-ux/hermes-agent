@@ -356,6 +356,7 @@ class TestConfig:
 
         monkeypatch.setitem(sys.modules, "hindsight", SimpleNamespace(HindsightEmbedded=FakeHindsightEmbedded))
         monkeypatch.setattr("plugins.memory.hindsight._check_local_runtime", lambda: (True, ""))
+        monkeypatch.setattr("tools.lazy_deps.ensure", lambda feature, prompt=True: None)
 
         p = HindsightMemoryProvider()
         p._mode = "local_embedded"
@@ -782,7 +783,10 @@ class TestPrefetchServerRetainVisibility:
 
     def test_operation_notfound_treated_as_complete(self, provider):
         """A NotFound (completed+evicted) op is treated as done, not pending."""
-        from hindsight_client_api.exceptions import NotFoundException
+        exceptions_mod = pytest.importorskip(
+            "hindsight_client_api.exceptions", reason="pinned hindsight-client SDK not installed"
+        )
+        NotFoundException = exceptions_mod.NotFoundException
 
         client = _make_mock_client()
         client.operations = MagicMock()
@@ -1673,6 +1677,7 @@ class TestMultiplexBackgroundScope:
         monkeypatch.setitem(sys.modules, "hindsight_embed", SimpleNamespace(daemon_embed_manager=dem))
         monkeypatch.setitem(sys.modules, "hindsight_embed.daemon_embed_manager", dem)
         monkeypatch.setattr("plugins.memory.hindsight._check_local_runtime", lambda: (True, ""))
+        monkeypatch.setattr("tools.lazy_deps.ensure", lambda feature, prompt=True: None)
 
         home = tmp_path / "profiles" / "p1"
         (home / "hindsight").mkdir(parents=True)
