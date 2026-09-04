@@ -6,6 +6,9 @@ It composes the canonical fake gateway process/connector fixture with the real
 connector is never connected, all databases live under pytest's temporary
 directory, and the only process termination is a disposable child paused
 inside its own SQLite transaction.
+
+The assertions are journal-mode agnostic: this harness proves transaction and
+recovery semantics, not WAL enablement.
 """
 
 from __future__ import annotations
@@ -244,6 +247,7 @@ def test_reservation_transaction_rollback_recovers_for_retry(tmp_path: Path) -> 
                 },
             )
 
+        assert not store._conn.in_transaction
         store._conn.execute("DROP TRIGGER abort_harness_reservation")
         store._conn.commit()
         assert store.lookup(scope, key, fingerprint) == ("missing", None)
