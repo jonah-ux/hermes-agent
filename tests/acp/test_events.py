@@ -8,8 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import acp
-from acp.schema import AgentPlanUpdate
+pytest.importorskip("acp", reason="agent-client-protocol ('acp' pyproject extra) not installed in this environment")
+
+import acp  # noqa: E402  -- after importorskip
+from acp.schema import AgentPlanUpdate  # noqa: E402  -- after importorskip
 
 from acp_adapter.events import (
     _build_plan_update_from_todo_result,

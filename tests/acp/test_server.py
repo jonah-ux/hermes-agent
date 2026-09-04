@@ -7,9 +7,11 @@ from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 
-import acp
-from acp.agent.router import build_agent_router
-from acp.schema import (
+pytest.importorskip("acp", reason="agent-client-protocol ('acp' pyproject extra) not installed in this environment")
+
+import acp  # noqa: E402  -- after importorskip
+from acp.agent.router import build_agent_router  # noqa: E402  -- after importorskip
+from acp.schema import (  # noqa: E402  -- after importorskip
     AgentCapabilities,
     AgentMessageChunk,
     AgentPlanUpdate,

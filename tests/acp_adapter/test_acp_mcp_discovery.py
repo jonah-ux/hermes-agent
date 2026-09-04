@@ -17,9 +17,11 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from acp_adapter.server import HermesACPAgent
-from acp_adapter.session import SessionManager, SessionState
-from hermes_cli import mcp_startup
+pytest.importorskip("acp", reason="agent-client-protocol ('acp' pyproject extra) not installed in this environment")
+
+from acp_adapter.server import HermesACPAgent  # noqa: E402  -- after importorskip
+from acp_adapter.session import SessionManager, SessionState  # noqa: E402  -- after importorskip
+from hermes_cli import mcp_startup  # noqa: E402  -- after importorskip
 
 
 # ---------------------------------------------------------------------------
