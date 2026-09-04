@@ -132,7 +132,9 @@ def _params(*, key: str = "harness:delivery:one", message_id: str = "a" * 32) ->
         "type": "REQUEST",
         "from_agent": "sender",
         "to_agent": "ops",
+        "target_connection": "spark02",
         "target_profile": "ops",
+        "target_handle": "ops",
         "message": message,
         "scope": {"mutation": "none", "production": "none"},
         "expires_at": time.time() + 600,
@@ -234,18 +236,36 @@ def test_valid_receipt_with_wrong_delivery_digest_is_rejected(tmp_path: Path) ->
     root = tmp_path / ".hermes"
     root.mkdir()
     fingerprint = "target=ops|message=synthetic"
-    assert bot_relay.begin_idempotent_delivery(root, "harness:digest", "b" * 32, fingerprint)[
-        "disposition"
-    ] == "admitted"
-    bot_relay.complete_idempotent_delivery(root, "harness:digest", "target response")
+    identity = {
+        "target_connection": "spark02",
+        "target_profile": "ops",
+        "target_handle": "ops",
+    }
+    assert bot_relay.begin_idempotent_delivery(
+        root, "harness:digest", "b" * 32, fingerprint, **identity
+    )["disposition"] == "admitted"
+    bot_relay.complete_idempotent_delivery(
+        root, "harness:digest", "target response", **identity
+    )
 
     receipt_path = bot_relay.delivery_receipt_path(root, "harness:digest")
     payload = json.loads(receipt_path.read_text(encoding="utf-8"))
     payload["delivery_sha256"] = hashlib.sha256(b"wrong delivery").hexdigest()
     receipt_path.write_text(json.dumps(payload), encoding="utf-8")
 
+    readback = bot_relay.read_idempotent_delivery(
+        root,
+        "harness:digest",
+        message_id="b" * 32,
+        delivery_fingerprint=fingerprint,
+        **identity,
+    )
+    assert readback == {
+        "disposition": "mismatch",
+        "reason": "target_receipt_mismatch",
+    }
     verdict = bot_relay.begin_idempotent_delivery(
-        root, "harness:digest", "b" * 32, fingerprint
+        root, "harness:digest", "b" * 32, fingerprint, **identity
     )
     assert verdict["disposition"] == "conflict"
 
@@ -264,6 +284,26 @@ def test_completed_receipt_readback_survives_fake_process_restart(
         params["idempotency_key"].encode("utf-8")
     ).hexdigest()
     assert receipt["message_id"] == params["message_id"]
+    assert receipt["target_connection"] == params["envelope"]["target_connection"]
+    assert receipt["target_profile"] == params["envelope"]["target_profile"]
+    assert receipt["target_handle"] == params["envelope"]["target_handle"]
+    assert first["target_receipt"] == receipt
+    fingerprint = bot_relay.delivery_fingerprint(
+        params["envelope"],
+        target_profile=params["profile"],
+        message=params["message"],
+        structured=True,
+    )
+    receipt_readback = bot_relay.read_idempotent_delivery(
+        gateway.home,
+        params["idempotency_key"],
+        message_id=params["message_id"],
+        delivery_fingerprint=fingerprint,
+        target_connection=params["envelope"]["target_connection"],
+        target_profile=params["envelope"]["target_profile"],
+        target_handle=params["envelope"]["target_handle"],
+    )
+    assert receipt_readback["disposition"] == "completed"
     assert [row["content"] for row in gateway.read_target_turn()] == [
         params["message"],
         "target response",
@@ -277,6 +317,7 @@ def test_completed_receipt_readback_survives_fake_process_restart(
     second = _deliver(restarted, monkeypatch, calls, params)
     assert second["replayed"] is True
     assert "already delivered" in second["reply"]
+    assert second["target_receipt"] == receipt
     assert len(calls) == 1
 
 
@@ -291,23 +332,27 @@ def test_duplicate_replay_runs_target_turn_once(
     second = _deliver(gateway, monkeypatch, calls, params)
     assert first["reply"] == "target response"
     assert second["replayed"] is True
+    assert second["target_receipt"] == first["target_receipt"]
     assert len(calls) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="candidate completion has no attempt/sequence fence for late writers",
-)
 def test_out_of_order_completion_does_not_overwrite_newer_receipt(tmp_path: Path) -> None:
     root = tmp_path / ".hermes"
     root.mkdir()
     key = "harness:ordering"
     fingerprint = "target=ops|message=ordering"
-    admitted = bot_relay.begin_idempotent_delivery(root, key, "c" * 32, fingerprint)
+    identity = {
+        "target_connection": "spark02",
+        "target_profile": "ops",
+        "target_handle": "ops",
+    }
+    admitted = bot_relay.begin_idempotent_delivery(
+        root, key, "c" * 32, fingerprint, **identity
+    )
     assert admitted["disposition"] == "admitted"
 
-    bot_relay.complete_idempotent_delivery(root, key, "newer completion")
-    bot_relay.complete_idempotent_delivery(root, key, "older completion")
+    bot_relay.complete_idempotent_delivery(root, key, "newer completion", **identity)
+    bot_relay.complete_idempotent_delivery(root, key, "older completion", **identity)
 
     receipt_path = bot_relay.delivery_receipt_path(root, key)
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -316,7 +361,7 @@ def test_out_of_order_completion_does_not_overwrite_newer_receipt(tmp_path: Path
 
 @pytest.mark.xfail(
     strict=True,
-    reason="candidate replays a completed receipt after its retention age",
+    reason="candidate still replays a completed receipt after its retention age",
 )
 def test_stale_receipt_does_not_suppress_a_fresh_delivery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
