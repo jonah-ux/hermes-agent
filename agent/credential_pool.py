@@ -22,6 +22,13 @@ from agent.credential_persistence import (
     is_borrowed_credential_source,
     sanitize_borrowed_credential_payload,
 )
+from agent.fleet_codex_publication import (
+    FLEET_CODEX_PUBLICATION_SOURCE,
+    FleetCodexPublication,
+    FleetCodexPublicationError,
+    fleet_credential_to_pool_payload,
+    read_fleet_codex_publication,
+)
 import hermes_cli.auth as auth_mod
 from hermes_cli.auth import (
     CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
@@ -186,6 +193,10 @@ _EXTRA_KEYS = frozenset({
     # with the entry so a restart doesn't downgrade a billing bench back to a
     # 60s transient cooldown.
     "failure_reason",
+    # Fleet publication references are metadata-only on disk. The access token
+    # itself is stripped by sanitize_borrowed_credential_payload().
+    "fleet_account_id", "fleet_slot", "fleet_bundle_sha256",
+    "fleet_publication_generated", "fleet_refresh_proof_observed_at",
 })
 
 
@@ -929,7 +940,13 @@ def persist_pool_entries(
 
 
 class CredentialPool:
-    def __init__(self, provider: str, entries: List[PooledCredential]):
+    def __init__(
+        self,
+        provider: str,
+        entries: List[PooledCredential],
+        *,
+        fleet_mode: Optional[bool] = None,
+    ):
         self.provider = provider
         self._entries = sorted(entries, key=lambda entry: entry.priority)
         self._current_id: Optional[str] = None
@@ -937,6 +954,18 @@ class CredentialPool:
         # providers only); set by load_pool(), consumed by add_entry().
         self._borrowed_root_ids: Set[str] = set()
         self._strategy = get_pool_strategy(provider)
+        # When the Fleet spoke publication is present, it is the sole runtime
+        # authority for Codex credentials on this node. Keep any older
+        # Hermes-owned rows visible for operator migration, but never select or
+        # refresh them: doing so would create a second rotating OAuth writer.
+        self._fleet_mode = (
+            provider == "openai-codex"
+            and (
+                any(entry.source == FLEET_CODEX_PUBLICATION_SOURCE for entry in self._entries)
+                if fleet_mode is None
+                else bool(fleet_mode)
+            )
+        )
         # RLock: the mutation primitives below (_replace_entry/_persist)
         # self-acquire this lock so the DEFERRED single-use-token refresh
         # path (which runs network I/O outside the lock by design) still
@@ -1346,6 +1375,71 @@ class CredentialPool:
             logger.debug("Failed to sync Codex entry from auth.json: %s", exc)
         return entry
 
+    def _sync_fleet_entry_from_publication(
+        self,
+        entry: PooledCredential,
+        publication: Optional[FleetCodexPublication] = None,
+    ) -> Optional[PooledCredential]:
+        """Rehydrate one Fleet access-only row without invoking OAuth.
+
+        Fleet's publication is the only token authority for ``fleet_mode``.
+        A newer publication replaces the in-memory access token and clears
+        failure state; a republish of the same token deliberately preserves a
+        prior 401/429 quarantine. Persistence remains metadata-only because
+        this source is classified as borrowed by credential_persistence.
+        """
+        if self.provider != "openai-codex" or entry.source != FLEET_CODEX_PUBLICATION_SOURCE:
+            return entry
+        try:
+            snapshot = publication or read_fleet_codex_publication()
+            if not snapshot.configured:
+                return None
+            account_id = entry.extra.get("fleet_account_id")
+            if not isinstance(account_id, str) or not account_id:
+                return None
+            candidate = next(
+                (item for item in snapshot.credentials if item.account_id == account_id),
+                None,
+            )
+            if candidate is None:
+                return None
+            known_fingerprint = entry.extra.get("secret_fingerprint")
+            token_changed = candidate.access_token != (entry.access_token or "")
+            if not entry.access_token and isinstance(known_fingerprint, str):
+                token_changed = fingerprint_secret_value(candidate.access_token) != known_fingerprint
+            updates: Dict[str, Any] = {
+                "access_token": candidate.access_token,
+                "refresh_token": None,
+                "last_refresh": candidate.last_refresh,
+                "extra": {
+                    **entry.extra,
+                    "fleet_account_id": candidate.account_id,
+                    "fleet_slot": candidate.slot,
+                    "fleet_bundle_sha256": candidate.bundle_sha256,
+                    "fleet_publication_generated": candidate.publication_generated,
+                    "fleet_refresh_proof_observed_at": candidate.refresh_proof_observed_at,
+                },
+            }
+            if token_changed:
+                updates.update(
+                    last_status=None,
+                    last_status_at=None,
+                    last_error_code=None,
+                    last_error_reason=None,
+                    last_error_message=None,
+                    last_error_reset_at=None,
+                )
+            updated = replace(entry, **updates)
+            if updated != entry:
+                self._replace_entry(entry, updated)
+                return updated
+            return entry
+        except FleetCodexPublicationError as exc:
+            logger.debug("Fleet Codex publication unavailable: %s", exc.reason)
+        except Exception:
+            logger.debug("Fleet Codex publication rehydration failed", exc_info=True)
+        return None
+
     def _sync_xai_oauth_entry_from_auth_store(self, entry: PooledCredential) -> PooledCredential:
         """Sync an xAI OAuth pool entry from auth.json if tokens differ.
 
@@ -1659,6 +1753,19 @@ class CredentialPool:
             logger.debug("Failed to sync %s pool entry back to auth store: %s", self.provider, exc)
 
     def _refresh_entry(self, entry: PooledCredential, *, force: bool) -> Optional[PooledCredential]:
+        if entry.source == FLEET_CODEX_PUBLICATION_SOURCE:
+            # Fleet owns the rotating refresh chain. A forced pool refresh is
+            # still only a publication re-read; Hermes must never POST OAuth
+            # or mark the Fleet row dead merely because no newer publication
+            # has arrived yet.
+            updated = self._sync_fleet_entry_from_publication(entry)
+            if updated is None:
+                return None
+            if _codex_access_token_is_expiring(updated.access_token, 0):
+                return None
+            if updated is not entry:
+                self._persist()
+            return updated
         if entry.auth_type != AUTH_TYPE_OAUTH or not entry.refresh_token:
             if force:
                 self._mark_exhausted(entry, None)
@@ -2326,6 +2433,12 @@ class CredentialPool:
     def _entry_needs_refresh(self, entry: PooledCredential) -> bool:
         if entry.auth_type != AUTH_TYPE_OAUTH:
             return False
+        if entry.source == FLEET_CODEX_PUBLICATION_SOURCE:
+            # Expiry is handled by the publication re-read in
+            # _available_entries(). Treating it as an OAuth refresh candidate
+            # would send a refresh-token-less Fleet row into Hermes'
+            # single-use refresh machinery.
+            return False
         if self.provider == "anthropic":
             if entry.expires_at_ms is None:
                 return False
@@ -2412,12 +2525,36 @@ class CredentialPool:
         sole_credential = sum(
             1 for e in self._entries if e.last_status != STATUS_DEAD
         ) <= 1
+        fleet_publication: Optional[FleetCodexPublication] = None
+        if self._fleet_mode:
+            try:
+                fleet_publication = read_fleet_codex_publication()
+            except FleetCodexPublicationError as exc:
+                # The publication reader already fails closed. Keep this log
+                # metadata-only and let every Fleet row remain unselectable.
+                logger.debug("Fleet Codex publication rejected: %s", exc.reason)
         for entry in self._entries:
             # Borrowed credentials persist as metadata-only references and are
             # hydrated from their live source on load.  A stale duplicate row
             # can remain unhydrated; never lease or select it as an empty key.
             if entry.auth_type == AUTH_TYPE_API_KEY and not entry.runtime_api_key:
                 continue
+            if self._fleet_mode:
+                # Keep Hermes-owned rows visible for explicit migration/status,
+                # but never select or refresh them while the Fleet bridge is
+                # configured. This is the no-second-refresher invariant.
+                if entry.source != FLEET_CODEX_PUBLICATION_SOURCE:
+                    continue
+                synced = self._sync_fleet_entry_from_publication(
+                    entry, fleet_publication
+                )
+                if synced is None:
+                    continue
+                if synced is not entry:
+                    entry = synced
+                    cleared_any = True
+                if _codex_access_token_is_expiring(entry.access_token, 0):
+                    continue
             # For anthropic claude_code entries, sync from the credentials file
             # before any status/refresh checks. This picks up tokens refreshed
             # by other processes (Claude Code CLI, other Hermes profiles).
@@ -3063,7 +3200,138 @@ def _upsert_entry(entries: List[PooledCredential], provider: str, source: str, p
     return bool(duplicate_indices)
 
 
+def _fleet_account_id(entry: PooledCredential) -> Optional[str]:
+    value = entry.extra.get("fleet_account_id")
+    return value if isinstance(value, str) and value else None
+
+
+def _upsert_fleet_entry(
+    entries: List[PooledCredential],
+    credential: Any,
+    *,
+    priority: int,
+) -> bool:
+    """Hydrate one Fleet publication row without persisting its access token."""
+    payload = fleet_credential_to_pool_payload(credential, priority=priority)
+    account_id = credential.account_id
+    matching = [
+        idx
+        for idx, entry in enumerate(entries)
+        if entry.source == FLEET_CODEX_PUBLICATION_SOURCE
+        and (_fleet_account_id(entry) == account_id or entry.id == payload["id"])
+    ]
+    if not matching:
+        entries.append(PooledCredential.from_dict("openai-codex", payload))
+        return True
+
+    duplicate_indices = set(matching[1:])
+    if duplicate_indices:
+        entries[:] = [
+            entry for idx, entry in enumerate(entries) if idx not in duplicate_indices
+        ]
+    existing = next(
+        entry
+        for entry in entries
+        if entry.source == FLEET_CODEX_PUBLICATION_SOURCE
+        and (_fleet_account_id(entry) == account_id or entry.id == payload["id"])
+    )
+    existing_idx = entries.index(existing)
+    known_fingerprint = existing.extra.get("secret_fingerprint")
+    token_changed = credential.access_token != (existing.access_token or "")
+    if not existing.access_token and isinstance(known_fingerprint, str):
+        token_changed = fingerprint_secret_value(credential.access_token) != known_fingerprint
+
+    extra_updates = {
+        key: payload[key]
+        for key in (
+            "fleet_account_id",
+            "fleet_slot",
+            "fleet_bundle_sha256",
+            "fleet_publication_generated",
+            "fleet_refresh_proof_observed_at",
+        )
+    }
+    updates: Dict[str, Any] = {
+        "access_token": credential.access_token,
+        "refresh_token": None,
+        "last_refresh": credential.last_refresh,
+        "extra": {**existing.extra, **extra_updates},
+    }
+    if token_changed:
+        updates.update(
+            last_status=None,
+            last_status_at=None,
+            last_error_code=None,
+            last_error_reason=None,
+            last_error_message=None,
+            last_error_reset_at=None,
+        )
+    updated = replace(existing, **updates)
+    entries[existing_idx] = updated
+    return bool(duplicate_indices) or existing.to_dict() != updated.to_dict()
+
+
+def _seed_from_fleet_publication(
+    provider: str,
+    entries: List[PooledCredential],
+) -> Tuple[bool, Set[str], bool]:
+    """Seed access-only Codex rows from the typed Fleet spoke publication."""
+    if provider != "openai-codex":
+        return False, set(), False
+    snapshot = read_fleet_codex_publication()
+    if not snapshot.configured:
+        return False, set(), False
+
+    changed = False
+    active_sources = {FLEET_CODEX_PUBLICATION_SOURCE}
+    active_accounts = {credential.account_id for credential in snapshot.credentials}
+    retained = [
+        entry
+        for entry in entries
+        if entry.source != FLEET_CODEX_PUBLICATION_SOURCE
+        or _fleet_account_id(entry) in active_accounts
+    ]
+    if len(retained) != len(entries):
+        entries[:] = retained
+        changed = True
+
+    for priority, credential in enumerate(snapshot.credentials):
+        changed |= _upsert_fleet_entry(entries, credential, priority=priority)
+    # ``configured`` must survive even when no account is currently eligible;
+    # otherwise a rate-limited/unknown Fleet publication would expose a legacy
+    # Hermes row as an accidental second refresher.
+    return changed, active_sources, True
+
+
 def _normalize_pool_priorities(provider: str, entries: List[PooledCredential]) -> bool:
+    if provider == "openai-codex":
+        # A configured Fleet publication is the runtime authority. Put its
+        # rows ahead of legacy Hermes-owned rows; CredentialPool also skips
+        # those legacy rows while fleet_mode is active, so no rotating second
+        # writer can be selected accidentally.
+        fleet_entries = sorted(
+            (entry for entry in entries if entry.source == FLEET_CODEX_PUBLICATION_SOURCE),
+            key=lambda entry: (
+                str(entry.extra.get("fleet_slot") or ""),
+                entry.priority,
+                entry.label,
+            ),
+        )
+        if not fleet_entries:
+            return False
+        other_entries = sorted(
+            (entry for entry in entries if entry.source != FLEET_CODEX_PUBLICATION_SOURCE),
+            key=lambda entry: (entry.priority, entry.label),
+        )
+        ordered = [*fleet_entries, *other_entries]
+        id_to_idx = {entry.id: idx for idx, entry in enumerate(entries)}
+        changed = False
+        for new_priority, entry in enumerate(ordered):
+            if entry.priority != new_priority:
+                entries[id_to_idx[entry.id]] = replace(entry, priority=new_priority)
+                changed = True
+        return changed
+
     if provider != "anthropic":
         return False
 
@@ -3817,12 +4085,15 @@ def load_pool(provider: str) -> CredentialPool:
     else:
         singleton_changed, singleton_sources = _seed_from_singletons(provider, entries)
         env_changed, env_sources = _seed_from_env(provider, entries)
+        fleet_changed, fleet_sources, fleet_configured = _seed_from_fleet_publication(provider, entries)
         changed = (
             raw_needs_sanitization
             or raw_needs_auth_normalization
             or singleton_changed
             or env_changed
+            or fleet_changed
         )
+        active_sources = singleton_sources | env_sources | fleet_sources
         # ``load_pool()`` is a non-destructive read for env-seeded entries: a
         # process missing a provider env var must not delete the persisted
         # pool entry for every other process (#9331). File-backed singletons
@@ -3840,13 +4111,13 @@ def load_pool(provider: str) -> CredentialPool:
             borrowed = [e for e in entries if e.id in disk_ids]
             others = [e for e in entries if e.id not in disk_ids]
             changed |= _prune_stale_seeded_entries(
-                others, singleton_sources | env_sources, prune_env_sources=False,
+                others, active_sources, prune_env_sources=False,
             )
             entries[:] = borrowed + others
         else:
             changed |= _prune_stale_seeded_entries(
                 entries,
-                singleton_sources | env_sources,
+                active_sources,
                 prune_env_sources=False,
             )
         changed |= _normalize_pool_priorities(provider, entries)
@@ -3858,7 +4129,7 @@ def load_pool(provider: str) -> CredentialPool:
             [entry.to_dict() for entry in sorted(entries, key=lambda item: item.priority)],
             removed_ids=disk_ids - new_ids,
         )
-    pool = CredentialPool(provider, entries)
+    pool = CredentialPool(provider, entries, fleet_mode=fleet_configured if provider == "openai-codex" else None)
     # Remember which rows are the root's grant (borrowed via fallback) so a
     # later ``add_entry`` in this profile can leave them out of the profile's
     # own store (#100339).
