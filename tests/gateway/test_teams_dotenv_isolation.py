@@ -106,12 +106,42 @@ def _install_fake_teams_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setitem(sys.modules, name, mod)
 
 
-def _purge_teams_adapter_modules() -> None:
+def _purge_teams_adapter_modules(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force a fresh Teams adapter/summary_writer import for this test.
+
+    Uses ``monkeypatch.delitem`` (not a raw ``del``) so pytest's teardown
+    restores every purged ``sys.modules`` entry once this test ends,
+    instead of permanently leaving the freshly-imported, fake-SDK-backed
+    module cached for the rest of the pytest process. A bare ``del`` here
+    previously caused
+    test_build_pipeline_runtime_skips_sender_when_adapter_layer_is_unavailable
+    (tests/gateway/test_teams_pipeline_runtime_wiring.py) to observe a
+    real, already-imported TeamsSummaryWriter (baked in by whichever of
+    these tests ran first) instead of hitting the ImportError path it
+    exercises, when both files run in the same pytest session.
+
+    Callers MUST invoke this a second time immediately after performing
+    the fresh import (see call sites below). ``monkeypatch.delitem`` only
+    schedules a restore for keys that already exist in ``sys.modules`` at
+    the moment it is called -- a module that gets newly created *during*
+    the test (i.e. the fresh ``plugins.platforms.teams.adapter`` /
+    ``...summary_writer`` objects this helper's callers import right
+    after purging) is invisible to the first call and was never
+    monkeypatched at all, so it silently survived teardown and leaked
+    into later tests/files even after switching to ``delitem``. Calling
+    this again post-import schedules THOSE new entries too; pytest undoes
+    monkeypatch calls in LIFO order, so the two delitem calls on the same
+    key correctly collapse back to "remove the key" (or restore whatever
+    legitimately pre-existed) once the test ends. Already-bound local
+    variables (e.g. ``teams_adapter``) keep working after this second
+    purge because removing a name from ``sys.modules`` does not affect an
+    object a test already holds a direct reference to.
+    """
     for name in list(sys.modules):
         if name == "plugins.platforms.teams" or name.startswith(
             "plugins.platforms.teams."
         ):
-            del sys.modules[name]
+            monkeypatch.delitem(sys.modules, name, raising=False)
 
 
 class TestTeamsAdapterImportDoesNotLeakDotenv:
@@ -124,9 +154,11 @@ class TestTeamsAdapterImportDoesNotLeakDotenv:
         for name in list(sys.modules):
             if name == "microsoft_teams" or name.startswith("microsoft_teams."):
                 monkeypatch.delitem(sys.modules, name, raising=False)
-        _purge_teams_adapter_modules()
+        _purge_teams_adapter_modules(monkeypatch)
 
         import plugins.platforms.teams.adapter as teams_adapter
+
+        _purge_teams_adapter_modules(monkeypatch)
 
         # Import must succeed even when the parent namespace is absent
         # (CI: no microsoft-teams-apps). Symbols stay unbound until connect.
@@ -134,12 +166,37 @@ class TestTeamsAdapterImportDoesNotLeakDotenv:
 
     def test_namespace_without_apps_is_not_sdk_available(self, monkeypatch):
         """A sibling microsoft_teams package must not count as the Teams SDK."""
+        # tests/gateway/test_teams.py installs a full fake microsoft_teams.*
+        # module tree (including microsoft_teams.apps) directly into the
+        # real sys.modules via a bare `sys.modules.setdefault(...)` at
+        # *module import/collection time* (not inside a test function, so
+        # monkeypatch never sees it and can never undo it). Once pytest has
+        # collected that file in this process, "microsoft_teams.apps" stays
+        # cached in sys.modules for the rest of the run.
+        #
+        # importlib.util.find_spec("microsoft_teams.apps") short-circuits to
+        # that cached module's __spec__ whenever the dotted name is already
+        # a sys.modules key -- it never re-consults the (here, deliberately
+        # empty) __path__ of the fresh `ns` package below. Without purging
+        # that stray submodule first, _probe_teams_sdk_available() would see
+        # a leaked "apps" submodule that has nothing to do with this test's
+        # namespace-only package and incorrectly report the SDK as
+        # available. Purge any stray microsoft_teams.* submodules (but not
+        # the bare "microsoft_teams" key itself, which is set immediately
+        # below) so this test's outcome does not depend on whether
+        # tests/gateway/test_teams.py has already been collected.
+        for name in list(sys.modules):
+            if name.startswith("microsoft_teams."):
+                monkeypatch.delitem(sys.modules, name, raising=False)
+
         ns = types.ModuleType("microsoft_teams")
         ns.__path__ = []  # type: ignore[attr-defined]
         monkeypatch.setitem(sys.modules, "microsoft_teams", ns)
-        _purge_teams_adapter_modules()
+        _purge_teams_adapter_modules(monkeypatch)
 
         import plugins.platforms.teams.adapter as teams_adapter
+
+        _purge_teams_adapter_modules(monkeypatch)
 
         assert teams_adapter.App is None
         assert teams_adapter.TEAMS_SDK_AVAILABLE is False
@@ -147,9 +204,11 @@ class TestTeamsAdapterImportDoesNotLeakDotenv:
     def test_adapter_import_does_not_load_cwd_dotenv(self, tmp_path, monkeypatch):
         _plant_cwd_dotenv(tmp_path, monkeypatch)
         _install_fake_teams_sdk(monkeypatch)
-        _purge_teams_adapter_modules()
+        _purge_teams_adapter_modules(monkeypatch)
 
         import plugins.platforms.teams.adapter as teams_adapter
+
+        _purge_teams_adapter_modules(monkeypatch)
 
         assert CANARY_KEY not in os.environ
         assert teams_adapter.App is None  # SDK symbols deferred
@@ -160,9 +219,11 @@ class TestTeamsAdapterImportDoesNotLeakDotenv:
         """teams_pipeline/runtime.py imports TeamsSummaryWriter directly."""
         _plant_cwd_dotenv(tmp_path, monkeypatch)
         _install_fake_teams_sdk(monkeypatch)
-        _purge_teams_adapter_modules()
+        _purge_teams_adapter_modules(monkeypatch)
 
         from plugins.platforms.teams.adapter import TeamsSummaryWriter
+
+        _purge_teams_adapter_modules(monkeypatch)
 
         assert CANARY_KEY not in os.environ
         assert TeamsSummaryWriter is not None
@@ -171,11 +232,13 @@ class TestTeamsAdapterImportDoesNotLeakDotenv:
         """Guarded SDK bind must no-op dotenv.load_dotenv (SDK import side effect)."""
         _plant_cwd_dotenv(tmp_path, monkeypatch)
         _install_fake_teams_sdk(monkeypatch)
-        _purge_teams_adapter_modules()
+        _purge_teams_adapter_modules(monkeypatch)
 
         import dotenv
 
         import plugins.platforms.teams.adapter as teams_adapter
+
+        _purge_teams_adapter_modules(monkeypatch)
 
         def _marking_load_dotenv(*args, **kwargs):
             os.environ[CANARY_KEY] = "leaked-from-sdk-import"
