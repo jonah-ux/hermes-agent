@@ -2436,13 +2436,12 @@ class FeishuAdapter(BasePlatformAdapter):
         """Send a local image file to Feishu."""
         if not self._client:
             return SendResult(success=False, error="Not connected")
-        if not os.path.exists(image_path):
+        if not await asyncio.to_thread(os.path.exists, image_path):
             return SendResult(success=False, error=f"Image file not found: {image_path}")
 
         try:
             import io as _io
-            with open(image_path, "rb") as f:
-                image_bytes = f.read()
+            image_bytes = await asyncio.to_thread(Path(image_path).read_bytes)
             # Wrap in BytesIO so lark SDK's MultipartEncoder can read .name and .tell()
             image_file = _io.BytesIO(image_bytes)
             image_file.name = os.path.basename(image_path)
@@ -4067,18 +4066,22 @@ class FeishuAdapter(BasePlatformAdapter):
             return self._resolve_media_message_type(media_types[0] if media_types else "", default=MessageType.DOCUMENT)
         return MessageType.TEXT
 
+    def _read_text_document_content(self, cached_path: str, media_type: str) -> str:
+        """Blocking helper for _maybe_extract_text_document — run via asyncio.to_thread."""
+        if os.path.getsize(cached_path) > _MAX_TEXT_INJECT_BYTES:
+            return ""
+        ext = Path(cached_path).suffix.lower()
+        if ext not in {".txt", ".md"} and media_type not in {"text/plain", "text/markdown"}:
+            return ""
+        content = Path(cached_path).read_text(encoding="utf-8")
+        display_name = self._display_name_from_cached_path(cached_path)
+        return f"[Content of {display_name}]:\n{content}"
+
     async def _maybe_extract_text_document(self, cached_path: str, media_type: str) -> str:
         if not cached_path or not media_type.startswith("text/"):
             return ""
         try:
-            if os.path.getsize(cached_path) > _MAX_TEXT_INJECT_BYTES:
-                return ""
-            ext = Path(cached_path).suffix.lower()
-            if ext not in {".txt", ".md"} and media_type not in {"text/plain", "text/markdown"}:
-                return ""
-            content = Path(cached_path).read_text(encoding="utf-8")
-            display_name = self._display_name_from_cached_path(cached_path)
-            return f"[Content of {display_name}]:\n{content}"
+            return await asyncio.to_thread(self._read_text_document_content, cached_path, media_type)
         except (OSError, UnicodeDecodeError):
             logger.warning("[Feishu] Failed to inject text document content from %s", cached_path, exc_info=True)
             return ""
@@ -4832,7 +4835,7 @@ class FeishuAdapter(BasePlatformAdapter):
     ) -> SendResult:
         if not self._client:
             return SendResult(success=False, error="Not connected")
-        if not os.path.exists(file_path):
+        if not await asyncio.to_thread(os.path.exists, file_path):
             return SendResult(success=False, error=f"File not found: {file_path}")
 
         display_name = file_name or os.path.basename(file_path)
@@ -4841,10 +4844,12 @@ class FeishuAdapter(BasePlatformAdapter):
             requested_message_type=outbound_message_type,
         )
         try:
+            import io as _io
             duration_ms = 0
             if upload_file_type == "opus":
                 duration_ms = self._get_audio_duration_ms(file_path)
-            with open(file_path, "rb") as file_obj:
+            file_bytes = await asyncio.to_thread(Path(file_path).read_bytes)
+            with _io.BytesIO(file_bytes) as file_obj:
                 body = self._build_file_upload_body(
                     file_type=upload_file_type,
                     file_name=display_name,
@@ -5817,7 +5822,7 @@ async def _standalone_send(
                 return {"error": f"Feishu send failed: {last_result.error}"}
 
         for media_path, is_voice in media_files:
-            if not os.path.exists(media_path):
+            if not await asyncio.to_thread(os.path.exists, media_path):
                 return {"error": f"Media file not found: {media_path}"}
             ext = os.path.splitext(media_path)[1].lower()
             if ext in _MIGRATION_IMAGE_EXTS:

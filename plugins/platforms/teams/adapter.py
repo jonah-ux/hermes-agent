@@ -546,6 +546,14 @@ import re as _re_teams
 _TEAMS_CONV_ID_RE = _re_teams.compile(r"^[A-Za-z0-9:@\-_.]+$")
 
 
+def _local_media_data_uri(path: str, mime_type: str) -> str:
+    """Blocking file read; call via ``asyncio.to_thread`` from async code."""
+    import base64 as _base64
+
+    with open(path, "rb") as f:
+        return f"data:{mime_type};base64,{_base64.b64encode(f.read()).decode()}"
+
+
 def _validate_teams_service_url(raw: str) -> Optional[str]:
     """Return a normalized service URL or ``None`` if it is not allowed.
 
@@ -1415,7 +1423,6 @@ class TeamsAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Teams app not initialized")
 
         try:
-            import base64
             import mimetypes
             from microsoft_teams.api import Attachment, MessageActivityInput
 
@@ -1426,8 +1433,7 @@ class TeamsAdapter(BasePlatformAdapter):
                 # Local path — encode as base64 data URI
                 path = source.removeprefix("file://")
                 mime_type = mimetypes.guess_type(path)[0] or default_mime
-                with open(path, "rb") as f:
-                    content_url = f"data:{mime_type};base64,{base64.b64encode(f.read()).decode()}"
+                content_url = await asyncio.to_thread(_local_media_data_uri, path, mime_type)
 
             attachment = Attachment(content_type=mime_type, content_url=content_url)
             activity = MessageActivityInput().add_attachments(attachment)

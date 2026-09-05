@@ -6470,7 +6470,8 @@ class GatewaySlashCommandsMixin:
                         f.write(str(rc))
                     """
                 ).strip()
-                subprocess.Popen(
+                await asyncio.to_thread(
+                    subprocess.Popen,
                     [
                         sys.executable, "-c", helper,
                         str(output_path), str(exit_code_path),
@@ -6495,7 +6496,8 @@ class GatewaySlashCommandsMixin:
                 setsid_bin = shutil.which("setsid")
                 if setsid_bin:
                     # Preferred: setsid creates a new session, fully detached
-                    subprocess.Popen(
+                    await asyncio.to_thread(
+                        subprocess.Popen,
                         [setsid_bin, "bash", "-c", update_cmd],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
@@ -6503,7 +6505,8 @@ class GatewaySlashCommandsMixin:
                     )
                 else:
                     # Fallback: start_new_session=True calls os.setsid() in child
-                    subprocess.Popen(
+                    await asyncio.to_thread(
+                        subprocess.Popen,
                         ["bash", "-c", update_cmd],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,

@@ -12522,7 +12522,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # inherits the gateway marker, `hermes gateway restart` refuses to
             # run as a self-restart loop guard and the gateway stays stopped.
             watcher_env.pop("_HERMES_GATEWAY", None)
-            project_root = Path(__file__).resolve().parent.parent
+            project_root = await asyncio.to_thread(lambda: Path(__file__).resolve().parent.parent)
             # The watcher runs sys.executable (console python) under the
             # CREATE_NO_WINDOW detach kwargs below: it owns one hidden
             # console, inherited by the `hermes gateway restart` child, so
@@ -12557,7 +12557,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # Mirrors the canonical fallback in
             # hermes_cli/gateway_windows.py::_spawn_detached.
             try:
-                subprocess.Popen(
+                await asyncio.to_thread(
+                    subprocess.Popen,
                     watcher_argv,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -12566,7 +12567,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
             except OSError:
                 try:
-                    subprocess.Popen(
+                    await asyncio.to_thread(
+                        subprocess.Popen,
                         watcher_argv,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
@@ -12611,7 +12613,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         watcher_env.pop("_HERMES_GATEWAY", None)
         setsid_bin = shutil.which("setsid")
         if setsid_bin:
-            subprocess.Popen(
+            await asyncio.to_thread(
+                subprocess.Popen,
                 [setsid_bin, "bash", "-lc", shell_cmd],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -12619,7 +12622,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 start_new_session=True,
             )
         else:
-            subprocess.Popen(
+            await asyncio.to_thread(
+                subprocess.Popen,
                 ["bash", "-lc", shell_cmd],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -13757,7 +13761,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
                 os.makedirs(_fh_log_dir, exist_ok=True)
                 _fh_enable_path = os.path.join(_fh_log_dir, "gateway_faulthandler.log")
-                _fh_enable_file = open(_fh_enable_path, "a", encoding="utf-8")
+                _fh_enable_file = await asyncio.to_thread(open, _fh_enable_path, "a", encoding="utf-8")
                 faulthandler.enable(file=_fh_enable_file, all_threads=True)
             except Exception:
                 logger.debug("faulthandler.enable() unavailable", exc_info=True)
@@ -13776,7 +13780,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
                 _faulthandler_path = os.path.join(_log_dir, "gateway_faulthandler.log")
                 os.makedirs(_log_dir, exist_ok=True)
-                _fh = open(_faulthandler_path, "a", encoding="utf-8")
+                _fh = await asyncio.to_thread(open, _faulthandler_path, "a", encoding="utf-8")
                 faulthandler.register(
                     _sigusr2,
                     file=_fh,
@@ -20688,12 +20692,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 from agent.context_references import preprocess_context_references_async
                 from agent.model_metadata import get_model_context_length_async
 
+                _msg_home_dir = await asyncio.to_thread(os.path.expanduser, "~")
                 try:
                     from tools.terminal_scope import terminal_env as _ts_env
                 except ImportError:
-                    _msg_cwd = os.environ.get("TERMINAL_CWD", os.path.expanduser("~"))
+                    _msg_cwd = os.environ.get("TERMINAL_CWD", _msg_home_dir)
                 else:
-                    _msg_cwd = _ts_env("TERMINAL_CWD", os.path.expanduser("~"))
+                    _msg_cwd = _ts_env("TERMINAL_CWD", _msg_home_dir)
                 _msg_config_ctx = None
                 _msg_cfg = None
                 _msg_model_cfg = {}
@@ -25033,10 +25038,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             actual_paths = result.get("file_paths") or [
                 result.get("file_path", audio_path)
             ]
-            actual_paths = [
-                str(path) for path in actual_paths
-                if path and os.path.isfile(path)
-            ]
+            actual_paths = await asyncio.to_thread(
+                lambda: [
+                    str(path) for path in actual_paths
+                    if path and os.path.isfile(path)
+                ]
+            )
             if not result.get("success") or not actual_paths:
                 logger.warning("Auto voice reply TTS failed: %s", result.get("error"))
                 return
@@ -25644,8 +25651,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         adapter = self._adapter_for_source(source)
         if adapter is None or not source.chat_id or not hasattr(adapter, "send_image_file"):
             return
-        image_path = Path(__file__).resolve().parent / "assets" / "telegram-botfather-threads-settings.jpg"
-        if not image_path.exists():
+        image_path = await asyncio.to_thread(
+            lambda: Path(__file__).resolve().parent / "assets" / "telegram-botfather-threads-settings.jpg"
+        )
+        if not await asyncio.to_thread(image_path.exists):
             return
         try:
             await adapter.send_image_file(
@@ -27691,7 +27700,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not getattr(self.config, "stt_enabled", True):
             notes = []
             for path in audio_paths:
-                abs_path = os.path.abspath(path)
+                abs_path = await asyncio.to_thread(os.path.abspath, path)
                 duration_str = await _probe_audio_duration(abs_path)
                 if duration_str:
                     notes.append(
@@ -27779,7 +27788,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     logger.info("Voice transcription failed for %s: %s", path, error)
                     from tools.credential_files import to_agent_visible_cache_path
 
-                    agent_path = to_agent_visible_cache_path(os.path.abspath(path))
+                    agent_path = to_agent_visible_cache_path(await asyncio.to_thread(os.path.abspath, path))
                     enriched_parts.append(
                         "[voice message could not be transcribed automatically; "
                         f"the audio is available at: {agent_path}]"
@@ -27788,7 +27797,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 logger.error("Transcription error: %s", e)
                 from tools.credential_files import to_agent_visible_cache_path
 
-                agent_path = to_agent_visible_cache_path(os.path.abspath(path))
+                agent_path = to_agent_visible_cache_path(await asyncio.to_thread(os.path.abspath, path))
                 enriched_parts.append(
                     "[voice message could not be transcribed automatically; "
                     f"the audio is available at: {agent_path}]"

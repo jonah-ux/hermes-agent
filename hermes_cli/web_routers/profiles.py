@@ -955,7 +955,10 @@ async def open_profile_terminal_endpoint(name: str):
         command = _profile_setup_command(name)
 
         if sys.platform.startswith("win"):
-            subprocess.Popen(["cmd.exe", "/c", "start", "", command])
+            # WHY-TRACE: GENUINE-BUG — Popen() forks/execs synchronously;
+            # this launch is fire-and-forget (never waited on), so the
+            # non-blocking asyncio spawn is a drop-in replacement.
+            await asyncio.create_subprocess_exec("cmd.exe", "/c", "start", "", command)
         elif sys.platform == "darwin":
             escaped = command.replace("\\", "\\\\").replace('"', '\\"')
             applescript = (
@@ -964,7 +967,8 @@ async def open_profile_terminal_endpoint(name: str):
                 f'do script "{escaped}"\n'
                 "end tell"
             )
-            subprocess.Popen(["osascript", "-e", applescript])
+            # WHY-TRACE: GENUINE-BUG — same fire-and-forget Popen() pattern.
+            await asyncio.create_subprocess_exec("osascript", "-e", applescript)
         else:
             terminal_commands = [
                 ("x-terminal-emulator", ["x-terminal-emulator", "-e", "sh", "-lc", command]),
@@ -979,12 +983,21 @@ async def open_profile_terminal_endpoint(name: str):
                 ("xterm", ["xterm", "-e", "sh", "-lc", command]),
             ]
             for executable, popen_args in terminal_commands:
-                if subprocess.call(
-                    ["which", executable],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                ) == 0:
-                    subprocess.Popen(popen_args)
+                # WHY-TRACE: GENUINE-BUG — subprocess.call() blocks the loop
+                # until `which` exits; the handler awaits this result before
+                # deciding the next candidate, so it moves to
+                # create_subprocess_exec + explicit wait() for the identical
+                # return-code check.
+                which_proc = await asyncio.create_subprocess_exec(
+                    "which",
+                    executable,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                if await which_proc.wait() == 0:
+                    # WHY-TRACE: GENUINE-BUG — same fire-and-forget Popen()
+                    # pattern as the two branches above.
+                    await asyncio.create_subprocess_exec(*popen_args)
                     break
             else:
                 raise HTTPException(

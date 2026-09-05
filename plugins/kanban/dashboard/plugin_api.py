@@ -198,6 +198,12 @@ def _comment_dict(c: kanban_db.Comment) -> dict[str, Any]:
     }
 
 
+def _write_attachment_bytes(dest_path: Path, data: bytes) -> None:
+    """Blocking file write; call via ``asyncio.to_thread`` from async code."""
+    with open(dest_path, "wb") as out:
+        out.write(data)
+
+
 def _attachment_dict(a: kanban_db.Attachment) -> dict[str, Any]:
     """Serialise an Attachment for the drawer. ``stored_path`` is the
     absolute on-disk path workers read; the UI uses ``id`` for download."""
@@ -743,23 +749,24 @@ async def upload_task_attachment(
         candidate = dest_path.name
 
         total = 0
+        chunks: list[bytes] = []
         try:
-            with open(dest_path, "wb") as out:
-                while True:
-                    chunk = await file.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if total > KANBAN_ATTACHMENT_MAX_BYTES:
-                        out.close()
-                        dest_path.unlink(missing_ok=True)
-                        raise HTTPException(
-                            status_code=413,
-                            detail=(
-                                f"attachment exceeds {KANBAN_ATTACHMENT_MAX_BYTES // (1024 * 1024)} MB limit"
-                            ),
-                        )
-                    out.write(chunk)
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > KANBAN_ATTACHMENT_MAX_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"attachment exceeds {KANBAN_ATTACHMENT_MAX_BYTES // (1024 * 1024)} MB limit"
+                        ),
+                    )
+                chunks.append(chunk)
+            # Buffered write off the event loop: `open()`/`write()` are blocking
+            # calls (ASYNC230); the cap check above already bounds the buffer.
+            await asyncio.to_thread(_write_attachment_bytes, dest_path, b"".join(chunks))
         except HTTPException:
             raise
         except OSError as exc:

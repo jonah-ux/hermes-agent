@@ -3940,7 +3940,7 @@ class SlackAdapter(BasePlatformAdapter):
         if not self._app:
             return SendResult(success=False, error="Not connected")
 
-        if not os.path.exists(file_path):
+        if not await asyncio.to_thread(os.path.exists, file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         chat_id = await self._ensure_dm_conversation(
@@ -4039,7 +4039,7 @@ class SlackAdapter(BasePlatformAdapter):
 
                         if image_url.startswith("file://"):
                             local_path = _unquote(image_url[7:])
-                            if not os.path.exists(local_path):
+                            if not await asyncio.to_thread(os.path.exists, local_path):
                                 logger.warning(
                                     "[Slack] Skipping missing image: %s", local_path
                                 )
@@ -4919,7 +4919,7 @@ class SlackAdapter(BasePlatformAdapter):
         if not self._app:
             return SendResult(success=False, error="Not connected")
 
-        if not os.path.exists(video_path):
+        if not await asyncio.to_thread(os.path.exists, video_path):
             return SendResult(
                 success=False, error=f"Video file not found: {video_path}"
             )
@@ -4984,7 +4984,7 @@ class SlackAdapter(BasePlatformAdapter):
         if not self._app:
             return SendResult(success=False, error="Not connected")
 
-        if not os.path.exists(file_path):
+        if not await asyncio.to_thread(os.path.exists, file_path):
             return SendResult(success=False, error=f"File not found: {file_path}")
 
         display_name = file_name or os.path.basename(file_path)
@@ -9600,7 +9600,7 @@ async def _standalone_send(
         caption_pending = caption_as_upload_comment
         uploaded_any = False
         for media_path, _is_voice in media_files:
-            if not os.path.exists(media_path):
+            if not await asyncio.to_thread(os.path.exists, media_path):
                 warning = f"Media file not found, skipping: {media_path}"
                 logger.warning("[Slack] %s", warning)
                 warnings.append(warning)

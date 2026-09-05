@@ -762,9 +762,11 @@ class LSPClient:
         if not self.is_running:
             raise LSPProtocolError("client not running")
 
-        abs_path = os.path.abspath(path)
+        abs_path = await asyncio.to_thread(os.path.abspath, path)
         try:
-            text = Path(abs_path).read_text(encoding="utf-8", errors="replace")
+            text = await asyncio.to_thread(
+                Path(abs_path).read_text, encoding="utf-8", errors="replace"
+            )
         except OSError as e:
             raise LSPProtocolError(f"cannot read {abs_path}: {e}") from e
 
@@ -831,7 +833,7 @@ class LSPClient:
         """Send didSave for ``path``.  Some linters re-scan only on save."""
         if not self.is_running:
             return
-        abs_path = os.path.abspath(path)
+        abs_path = await asyncio.to_thread(os.path.abspath, path)
         await self._send_notification(
             "textDocument/didSave",
             {"textDocument": {"uri": file_uri(abs_path)}},
@@ -851,7 +853,7 @@ class LSPClient:
         Silently no-ops on errors (server may not support the pull
         endpoint).
         """
-        abs_path = os.path.abspath(path)
+        abs_path = await asyncio.to_thread(os.path.abspath, path)
         doc = self._docs.get(abs_path)
         sent_version = doc.version if doc else -1
         try:
@@ -916,7 +918,7 @@ class LSPClient:
         else:
             budget = DIAGNOSTICS_FULL_WAIT if mode == "full" else DIAGNOSTICS_DOCUMENT_WAIT
         deadline = asyncio.get_event_loop().time() + budget
-        abs_path = os.path.abspath(path)
+        abs_path = await asyncio.to_thread(os.path.abspath, path)
 
         while True:
             if not self._connection_is_open():

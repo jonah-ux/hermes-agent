@@ -3771,6 +3771,19 @@ class ConnectionManager:
             except Exception:
                 pass
 
+def _read_local_file_bytes(path: str) -> bytes:
+    """Sync helper (run via ``asyncio.to_thread``): read a local file's bytes.
+
+    Raises ``ValueError`` (instead of ``FileNotFoundError``/``OSError``) when
+    ``path`` does not exist, mirroring the previous inline
+    ``os.path.isfile(path)`` guard so callers keep catching ``ValueError``.
+    """
+    if not os.path.isfile(path):
+        raise ValueError(f"File not found: {path}")
+    with open(path, "rb") as f:
+        return f.read()
+
+
 class MediaSendHandler(ABC):
     """Abstract base class for media send strategies.
 
@@ -3932,11 +3945,8 @@ class ImageFileHandler(MediaSendHandler):
 
     async def acquire_file(self, adapter, **kwargs):
         image_path: str = kwargs["image_path"]
-        if not os.path.isfile(image_path):
-            raise ValueError(f"File not found: {image_path}")
         logger.info("[%s] ImageFileHandler: reading %s", adapter.name, image_path)
-        with open(image_path, "rb") as f:
-            file_bytes = f.read()
+        file_bytes = await asyncio.to_thread(_read_local_file_bytes, image_path)
         filename = os.path.basename(image_path) or "image.jpg"
         content_type = guess_mime_type(filename) or "image/jpeg"
         return file_bytes, filename, content_type
@@ -3984,11 +3994,8 @@ class DocumentHandler(MediaSendHandler):
 
     async def acquire_file(self, adapter, **kwargs):
         file_path: str = kwargs["file_path"]
-        if not os.path.isfile(file_path):
-            raise ValueError(f"File not found: {file_path}")
         logger.info("[%s] DocumentHandler: reading %s", adapter.name, file_path)
-        with open(file_path, "rb") as f:
-            file_bytes = f.read()
+        file_bytes = await asyncio.to_thread(_read_local_file_bytes, file_path)
         filename = kwargs.get("filename") or os.path.basename(file_path) or "document"
         content_type = guess_mime_type(filename) or "application/octet-stream"
         return file_bytes, filename, content_type

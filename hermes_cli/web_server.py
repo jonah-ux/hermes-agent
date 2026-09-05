@@ -2561,7 +2561,11 @@ async def get_media(path: str):
     (resolved, symlink-safe) so it can't be used to read arbitrary files.
     """
     try:
-        target = Path(path).expanduser().resolve()
+        # WHY-TRACE: GENUINE-BUG — resolve() walks symlinks on disk (real
+        # syscalls) and is required here for the symlink-safe media-root
+        # check below; keep the exact same resolution, just off the event
+        # loop so one slow/broken mount doesn't stall every request.
+        target = await asyncio.to_thread(lambda: Path(path).expanduser().resolve())
     except (OSError, RuntimeError):
         raise HTTPException(status_code=400, detail="Invalid path")
 
@@ -3109,8 +3113,10 @@ async def upload_managed_file_stream(
         # importantly asyncio.CancelledError when a browser aborts a large
         # upload mid-stream (the exact NS-501 scenario). os.replace clears
         # tmp_path on success, so only unlink when the rename didn't happen.
+        # WHY-TRACE: GENUINE-BUG — unlink() is a real syscall; off-loading it
+        # keeps this cleanup path from blocking the loop during the abort.
         if not renamed:
-            tmp_path.unlink(missing_ok=True)
+            await asyncio.to_thread(tmp_path.unlink, missing_ok=True)
         await file.close()
 
     return {
@@ -5644,7 +5650,10 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
         )
 
     file_path = result.get("file_path")
-    if not file_path or not os.path.isfile(file_path):
+    # WHY-TRACE: GENUINE-BUG — os.path.isfile() is a stat() syscall; run it
+    # off-thread. Keep the short-circuit so a falsy file_path never touches
+    # the filesystem, matching the original `or` semantics.
+    if not file_path or not await asyncio.to_thread(os.path.isfile, file_path):
         raise HTTPException(status_code=500, detail="Audio file missing")
 
     ext = os.path.splitext(file_path)[1].lower()
@@ -14667,7 +14676,12 @@ async def run_backup(body: BackupRequest):
 async def download_dashboard_backup(archive: str):
     try:
         backup_dir = _dashboard_backup_dir().expanduser().resolve(strict=False)
-        target = Path(archive).expanduser().resolve(strict=True)
+        # WHY-TRACE: GENUINE-BUG — strict=True resolve() stats every path
+        # component and raises FileNotFoundError on disk; move it off-thread
+        # so a caller-supplied archive path can't stall the loop.
+        target = await asyncio.to_thread(
+            lambda: Path(archive).expanduser().resolve(strict=True)
+        )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Backup not found")
     except (OSError, RuntimeError):
@@ -14691,7 +14705,8 @@ async def run_import(body: ImportRequest):
     archive = (body.archive or "").strip()
     if not archive:
         raise HTTPException(status_code=400, detail="archive path is required")
-    if not os.path.isfile(archive):
+    # WHY-TRACE: GENUINE-BUG — isfile() is a stat() syscall; off-load it.
+    if not await asyncio.to_thread(os.path.isfile, archive):
         raise HTTPException(status_code=404, detail=f"Archive not found: {archive}")
     args = ["import", archive]
     if body.force:
@@ -14764,8 +14779,10 @@ async def run_import_upload(
             detail=f"Could not write uploaded archive: {exc}",
         )
     finally:
+        # WHY-TRACE: GENUINE-BUG — unlink() is a real syscall; off-load it
+        # so an aborted upload's cleanup can't stall the loop.
         if not renamed:
-            tmp_path.unlink(missing_ok=True)
+            await asyncio.to_thread(tmp_path.unlink, missing_ok=True)
         await file.close()
 
     if not zipfile.is_zipfile(target):
@@ -19226,7 +19243,10 @@ async def serve_plugin_asset(plugin_name: str, file_path: str):
     base = Path(plugin["_dir"])
     target = (base / file_path).resolve()
 
-    if not target.is_relative_to(base.resolve()):
+    # WHY-TRACE: GENUINE-BUG — resolve() walks symlinks on disk; off-load it
+    # so this security check can't stall the loop on a slow filesystem.
+    resolved_base = await asyncio.to_thread(base.resolve)
+    if not target.is_relative_to(resolved_base):
         raise HTTPException(status_code=403, detail="Path traversal blocked")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")

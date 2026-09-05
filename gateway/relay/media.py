@@ -76,6 +76,14 @@ def media_base_url(relay_dial_url: str) -> str:
 _MEDIA_USER_AGENT = "HermesAgent-Relay/1.0 (+https://github.com/NousResearch/hermes-agent)"
 
 
+def _read_bytes_or_none(path: Path) -> Optional[bytes]:
+    """Blocking file read; call via ``asyncio.to_thread`` from async code."""
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
 class RelayMediaClient:
     """Authenticated client for the connector's ``/relay/media`` routes."""
 
@@ -117,9 +125,8 @@ class RelayMediaClient:
         if not self.enabled:
             return None
         path = Path(file_path)
-        try:
-            data = path.read_bytes()
-        except OSError:
+        data = await asyncio.to_thread(_read_bytes_or_none, path)
+        if data is None:
             logger.warning("relay media upload: cannot read %s", file_path)
             return None
         if not data or len(data) > MEDIA_MAX_BYTES:

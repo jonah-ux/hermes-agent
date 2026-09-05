@@ -1079,6 +1079,18 @@ class SignalAdapter(BasePlatformAdapter):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _file_size_if_exists(path: str) -> Optional[int]:
+        """Sync helper (run via ``asyncio.to_thread``): file size, or None if missing.
+
+        Mirrors the previous inline ``Path(path).exists()`` + ``Path(path).stat()``
+        checks without changing which exceptions propagate for other error cases.
+        """
+        p = Path(path)
+        if not p.exists():
+            return None
+        return p.stat().st_size
+
+    @staticmethod
     def _utf16_offsets(text: str) -> list[int]:
         """Return cumulative UTF-16 offsets for every Python character boundary."""
         offsets = [0]
@@ -1340,12 +1352,16 @@ class SignalAdapter(BasePlatformAdapter):
                     skipped_download += 1
                     continue
 
-            if not file_path or not Path(file_path).exists():
+            file_size = (
+                await asyncio.to_thread(self._file_size_if_exists, file_path)
+                if file_path
+                else None
+            )
+            if file_size is None:
                 logger.warning("Signal: image file not found for %s", image_url)
                 skipped_missing += 1
                 continue
 
-            file_size = Path(file_path).stat().st_size
             if file_size > SIGNAL_MAX_ATTACHMENT_SIZE:
                 logger.warning(
                     "Signal: image too large (%d bytes), skipping %s", file_size, image_url
@@ -1510,11 +1526,15 @@ class SignalAdapter(BasePlatformAdapter):
                 logger.warning("Signal: failed to download image: %s", e)
                 return SendResult(success=False, error=str(e))
 
-        if not file_path or not Path(file_path).exists():
+        file_size = (
+            await asyncio.to_thread(self._file_size_if_exists, file_path)
+            if file_path
+            else None
+        )
+        if file_size is None:
             return SendResult(success=False, error="Image file not found")
 
         # Validate size
-        file_size = Path(file_path).stat().st_size
         if file_size > SIGNAL_MAX_ATTACHMENT_SIZE:
             return SendResult(success=False, error=f"Image too large ({file_size} bytes)")
 
@@ -1553,7 +1573,7 @@ class SignalAdapter(BasePlatformAdapter):
         await self._stop_typing_indicator(chat_id)
 
         try:
-            file_size = Path(file_path).stat().st_size
+            file_size = (await asyncio.to_thread(Path(file_path).stat)).st_size
         except FileNotFoundError:
             return SendResult(success=False, error=f"{media_label} file not found: {file_path}")
 

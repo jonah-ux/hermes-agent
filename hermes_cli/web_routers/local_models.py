@@ -1388,6 +1388,11 @@ async def local_models_download_browsed(body: BrowsedDownloadBody):
     return {"job_id": job["job_id"], "model_id": model_id}
 
 
+def _is_gguf_file(src: Path) -> bool:
+    """Blocking file-type check; call via ``asyncio.to_thread`` from async code."""
+    return src.is_file() and src.suffix.lower() == ".gguf"
+
+
 class SideloadBody(BaseModel):
     path: str                   # absolute path to a .gguf on this machine
 
@@ -1398,13 +1403,14 @@ async def local_models_sideload(body: SideloadBody):
     the managed models dir (copy only when linking is impossible) and
     bounce the router so it serves immediately. The original stays where
     it is; delete-from-Hermes removes only our link."""
+    import asyncio
     import os
     import shutil
 
     from starlette.concurrency import run_in_threadpool
 
     src = Path(body.path)
-    if not src.is_file() or src.suffix.lower() != ".gguf":
+    if not await asyncio.to_thread(_is_gguf_file, src):
         raise HTTPException(status_code=422, detail="Pick a .gguf model file")
     dest = _models_dir() / src.name
     if dest.exists():

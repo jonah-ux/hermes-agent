@@ -56,6 +56,11 @@ from utils import is_truthy_value
 logger = logging.getLogger(__name__)
 
 
+def _path_exists(path: str) -> bool:
+    """Blocking stat call; call via ``asyncio.to_thread`` from async code."""
+    return Path(path).exists()
+
+
 def _get_esecret(name: str, default: str = "") -> str:
     """Scope-aware ``EMAIL_*`` read with the default-profile startup fallback.
 
@@ -1319,7 +1324,7 @@ class EmailAdapter(BasePlatformAdapter):
                 body_parts.append(alt_text)
             if image_url.startswith("file://"):
                 local_path = _unquote(image_url[7:])
-                if Path(local_path).exists():
+                if await asyncio.to_thread(_path_exists, local_path):
                     local_paths.append(local_path)
                 else:
                     logger.warning("[Email] Skipping missing image: %s", local_path)

@@ -610,7 +610,7 @@ class MattermostAdapter(BasePlatformAdapter):
         import mimetypes
 
         p = Path(file_path)
-        if not p.exists():
+        if not await asyncio.to_thread(p.exists):
             logger.warning(
                 "Mattermost: local file not found, skipping: %s", file_path
             )
@@ -618,7 +618,7 @@ class MattermostAdapter(BasePlatformAdapter):
 
         fname = file_name or p.name
         ct = mimetypes.guess_type(fname)[0] or "application/octet-stream"
-        file_data = p.read_bytes()
+        file_data = await asyncio.to_thread(p.read_bytes)
 
         file_id = await self._upload_file(chat_id, file_data, fname, ct)
         if not file_id:
@@ -677,12 +677,12 @@ class MattermostAdapter(BasePlatformAdapter):
                     if image_url.startswith("file://"):
                         local_path = _unquote(image_url[7:])
                         p = Path(local_path)
-                        if not p.exists():
+                        if not await asyncio.to_thread(p.exists):
                             logger.warning("Mattermost: skipping missing image %s", local_path)
                             continue
                         fname = p.name
                         ct = mimetypes.guess_type(fname)[0] or "image/png"
-                        file_data = p.read_bytes()
+                        file_data = await asyncio.to_thread(p.read_bytes)
                     else:
                         from tools.url_safety import is_safe_url
                         if not is_safe_url(image_url):
@@ -1099,18 +1099,17 @@ async def _standalone_send(
             file_ids: List[str] = []
             for media in media_files:
                 file_path = media.get("path") if isinstance(media, dict) else media
-                if not file_path or not os.path.exists(file_path):
+                if not file_path or not await asyncio.to_thread(os.path.exists, file_path):
                     continue
                 form = aiohttp.FormData()
                 # Mattermost requires channel_id on file uploads so the
                 # server can attribute them.
                 form.add_field("channel_id", chat_id)
-                with open(file_path, "rb") as fh:
-                    form.add_field(
-                        "files",
-                        fh.read(),
-                        filename=os.path.basename(file_path),
-                    )
+                form.add_field(
+                    "files",
+                    await asyncio.to_thread(Path(file_path).read_bytes),
+                    filename=os.path.basename(file_path),
+                )
                 async with session.post(
                     f"{base_url}/api/v4/files",
                     data=form,

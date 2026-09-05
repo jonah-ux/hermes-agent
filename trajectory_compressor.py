@@ -354,6 +354,49 @@ class AggregateMetrics:
         }
 
 
+def _glob_jsonl_files(input_dir: Path):
+    """Blocking directory scan; call via ``asyncio.to_thread`` from async code."""
+    return sorted(input_dir.glob("*.jsonl"))
+
+
+def _read_jsonl_file(file_path: Path):
+    """Blocking JSONL read; call via ``asyncio.to_thread`` from async code.
+
+    Returns ``(entries, errors)`` where ``entries`` is a list of
+    ``(line_num, entry)`` tuples and ``errors`` is a list of
+    ``(line_num, exc)`` for lines that failed to parse as JSON.
+    """
+    entries = []
+    errors = []
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line_num, line in enumerate(f):
+            line = line.strip()
+            if line:
+                try:
+                    entries.append((line_num, json.loads(line)))
+                except json.JSONDecodeError as e:
+                    errors.append((line_num, e))
+    return entries, errors
+
+
+def _mkdir_parents(path: Path) -> None:
+    """Blocking directory creation; call via ``asyncio.to_thread`` from async code."""
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def _write_jsonl_file(output_path: Path, entries) -> None:
+    """Blocking JSONL write; call via ``asyncio.to_thread`` from async code."""
+    with open(output_path, 'w', encoding='utf-8') as f:
+        for entry in entries:
+            f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+
+
+def _write_json_file(path: Path, data) -> None:
+    """Blocking JSON write; call via ``asyncio.to_thread`` from async code."""
+    with open(path, 'w', encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
 class TrajectoryCompressor:
     """
     Compresses agent trajectories to fit within a target token budget.
@@ -1126,7 +1169,7 @@ Write only the summary, starting with "[CONTEXT SUMMARY]:" prefix."""
         start_time = time.time()
         
         # Find all JSONL files
-        jsonl_files = sorted(input_dir.glob("*.jsonl"))
+        jsonl_files = await asyncio.to_thread(_glob_jsonl_files, input_dir)
         
         if not jsonl_files:
             self.logger.warning("No JSONL files found in %s", input_dir)
@@ -1137,15 +1180,11 @@ Write only the summary, starting with "[CONTEXT SUMMARY]:" prefix."""
         all_entries = []  # List of (file_path, entry_idx, entry)
         
         for file_path in jsonl_files:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                for line_num, line in enumerate(f):
-                    line = line.strip()
-                    if line:
-                        try:
-                            entry = json.loads(line)
-                            all_entries.append((file_path, line_num, entry))
-                        except json.JSONDecodeError as e:
-                            self.logger.warning("Skipping invalid JSON at %s:%s: %s", file_path, line_num, e)
+            entries, errors = await asyncio.to_thread(_read_jsonl_file, file_path)
+            for line_num, entry in entries:
+                all_entries.append((file_path, line_num, entry))
+            for line_num, e in errors:
+                self.logger.warning("Skipping invalid JSON at %s:%s: %s", file_path, line_num, e)
         
         total_entries = len(all_entries)
         
@@ -1279,7 +1318,7 @@ Write only the summary, starting with "[CONTEXT SUMMARY]:" prefix."""
         
         # Write results to output files (preserving original order)
         console.print("\n[dim]Writing output files...[/dim]")
-        output_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(_mkdir_parents, output_dir)
         
         for file_path in jsonl_files:
             output_path = output_dir / file_path.name
@@ -1292,9 +1331,7 @@ Write only the summary, starting with "[CONTEXT SUMMARY]:" prefix."""
                 if file_results[idx] is not None
             ]
             
-            with open(output_path, 'w', encoding='utf-8') as f:
-                for entry in sorted_entries:
-                    f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+            await asyncio.to_thread(_write_jsonl_file, output_path, sorted_entries)
         
         # Record end time
         self.aggregate_metrics.processing_end_time = datetime.now().isoformat()
@@ -1306,8 +1343,7 @@ Write only the summary, starting with "[CONTEXT SUMMARY]:" prefix."""
         # Save metrics
         if self.config.metrics_enabled:
             metrics_path = output_dir / self.config.metrics_output_file
-            with open(metrics_path, 'w', encoding="utf-8") as f:
-                json.dump(self.aggregate_metrics.to_dict(), f, indent=2)
+            await asyncio.to_thread(_write_json_file, metrics_path, self.aggregate_metrics.to_dict())
             console.print(f"\n💾 Metrics saved to {metrics_path}")
     
     def _print_summary(self):

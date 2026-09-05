@@ -246,9 +246,10 @@ class MicrosoftGraphClient:
                 continue
 
             os.replace(tmp_target, target)
+            target_stat = await asyncio.to_thread(target.stat)
             return {
                 "path": str(target),
-                "size_bytes": target.stat().st_size,
+                "size_bytes": target_stat.st_size,
                 "content_type": content_type,
             }
 

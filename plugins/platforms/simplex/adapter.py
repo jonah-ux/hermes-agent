@@ -1043,7 +1043,7 @@ class SimplexAdapter(BasePlatformAdapter):
                 logger.warning("SimpleX: failed to download image: %s", e)
                 return SendResult(success=False, error=str(e))
 
-        if not file_path or not Path(file_path).exists():
+        if not file_path or not await asyncio.to_thread(Path(file_path).exists):
             return SendResult(success=False, error="Image file not found")
 
         png_path, thumb_uri = self._prepare_image(file_path)
@@ -1107,7 +1107,7 @@ class SimplexAdapter(BasePlatformAdapter):
         **kwargs,
     ) -> SendResult:
         """Send a document/file attachment."""
-        if not Path(file_path).exists():
+        if not await asyncio.to_thread(Path(file_path).exists):
             return SendResult(success=False, error="File not found")
 
         composed = json.dumps(
@@ -1146,7 +1146,7 @@ class SimplexAdapter(BasePlatformAdapter):
         a downloadable file; the structured ``/_send`` form with
         ``msgContent.type == "voice"`` produces the voice-note player.
         """
-        if not Path(audio_path).exists():
+        if not await asyncio.to_thread(Path(audio_path).exists):
             return SendResult(success=False, error="Voice file not found")
 
         composed = json.dumps(

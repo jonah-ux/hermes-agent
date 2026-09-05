@@ -986,10 +986,10 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         """
         if self._http_client is None:
             return None, "Not connected"
-        if not os.path.exists(file_path):
+        if not await asyncio.to_thread(os.path.exists, file_path):
             return None, f"File not found: {file_path}"
 
-        size = os.path.getsize(file_path)
+        size = await asyncio.to_thread(os.path.getsize, file_path)
         cap = _MEDIA_SIZE_LIMITS.get(media_kind, _MEDIA_SIZE_LIMITS["document"])
         if size > cap:
             return None, (
@@ -1005,13 +1005,17 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         url = self._graph_url("media")
         headers = {"Authorization": f"Bearer {self._access_token}"}
         try:
-            with open(file_path, "rb") as fh:
-                files = {
-                    "file": (os.path.basename(file_path), fh, mime_type),
-                    "messaging_product": (None, "whatsapp"),
-                    "type": (None, mime_type),
-                }
-                resp = await self._http_client.post(url, headers=headers, files=files)
+            def _read_file_bytes() -> bytes:
+                with open(file_path, "rb") as fh:
+                    return fh.read()
+
+            file_bytes = await asyncio.to_thread(_read_file_bytes)
+            files = {
+                "file": (os.path.basename(file_path), file_bytes, mime_type),
+                "messaging_product": (None, "whatsapp"),
+                "type": (None, mime_type),
+            }
+            resp = await self._http_client.post(url, headers=headers, files=files)
         except Exception as exc:
             logger.exception("[whatsapp_cloud] media upload failed")
             return None, str(exc)
@@ -1215,8 +1219,9 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         is_local_mp3 = (
             not audio_path.startswith(("http://", "https://"))
             and audio_path.lower().endswith(".mp3")
-            and os.path.exists(audio_path)
         )
+        if is_local_mp3:
+            is_local_mp3 = await asyncio.to_thread(os.path.exists, audio_path)
         if is_local_mp3:
             opus_path = await self._convert_to_opus(audio_path)
             if opus_path:
@@ -1287,7 +1292,8 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                 stderr=asyncio.subprocess.PIPE,
             )
             _, stderr = await proc.communicate()
-            if proc.returncode != 0 or not Path(out_path).exists():
+            out_exists = await asyncio.to_thread(Path(out_path).exists)
+            if proc.returncode != 0 or not out_exists:
                 logger.error(
                     "[whatsapp_cloud] ffmpeg opus conversion failed "
                     "(returncode=%s): %s",
@@ -1395,7 +1401,7 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         if not ext:
             ext = ".bin"
 
-        _INBOUND_MEDIA_CACHE.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(_INBOUND_MEDIA_CACHE.mkdir, parents=True, exist_ok=True)
         out_path = _INBOUND_MEDIA_CACHE / f"{media_id}{ext}"
         try:
             out_path.write_bytes(blob_resp.content)
@@ -2034,7 +2040,8 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                     ".log", ".py", ".js", ".ts", ".html", ".css",
                 }:
                     try:
-                        file_size = Path(doc_path).stat().st_size
+                        file_stat = await asyncio.to_thread(Path(doc_path).stat)
+                        file_size = file_stat.st_size
                         if file_size > MAX_TEXT_INJECT_BYTES:
                             logger.info(
                                 "[whatsapp_cloud] skipping text injection for %s "
@@ -2042,8 +2049,9 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                                 doc_path, file_size, MAX_TEXT_INJECT_BYTES,
                             )
                             continue
-                        content = Path(doc_path).read_text(
-                            encoding="utf-8", errors="replace"
+                        content = await asyncio.to_thread(
+                            Path(doc_path).read_text,
+                            encoding="utf-8", errors="replace",
                         )
                         display_name = Path(doc_path).name
                         injection = f"[Content of {display_name}]:\n{content}"

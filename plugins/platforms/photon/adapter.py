@@ -1688,7 +1688,11 @@ class PhotonAdapter(BasePlatformAdapter):
             )
 
         try:
-            self._sidecar_proc = subprocess.Popen(  # noqa: S603
+            # Spawn off-loop (ASYNC220): Popen blocks the event loop during fork/exec.
+            # Kept as a sync Popen object because the supervision path below relies on
+            # .poll()/.terminate()/.kill().
+            self._sidecar_proc = await asyncio.to_thread(  # noqa: S603
+                subprocess.Popen,
                 [self._node_bin, str(_sidecar_dir() / "index.mjs")],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
