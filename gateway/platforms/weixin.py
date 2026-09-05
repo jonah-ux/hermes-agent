@@ -2065,12 +2065,12 @@ class WeixinAdapter(BasePlatformAdapter):
         else:
             file_path = image_url.replace("file://", "")
             if not os.path.isabs(file_path):
-                file_path = os.path.abspath(file_path)
+                file_path = await asyncio.to_thread(os.path.abspath, file_path)
             cleanup = False
         try:
             return await self.send_document(chat_id, file_path, caption=caption, metadata=metadata)
         finally:
-            if cleanup and file_path and os.path.exists(file_path):
+            if cleanup and file_path and await asyncio.to_thread(os.path.exists, file_path):
                 try:
                     os.unlink(file_path)
                 except OSError:
@@ -2184,7 +2184,7 @@ class WeixinAdapter(BasePlatformAdapter):
         force_file_attachment: bool = False,
     ) -> str:
         assert self._send_session is not None and self._token is not None
-        plaintext = Path(path).read_bytes()
+        plaintext = await asyncio.to_thread(Path(path).read_bytes)
         media_type, item_builder = self._outbound_media_builder(path, force_file_attachment=force_file_attachment)
         filekey = secrets.token_hex(16)
         aes_key = secrets.token_bytes(16)
