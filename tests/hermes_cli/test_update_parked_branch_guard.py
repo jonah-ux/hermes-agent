@@ -249,6 +249,12 @@ def _patch_update_flow(monkeypatch, repo, run_real_git=True):
     repo (the whole point of these regressions).
     """
     monkeypatch.setattr(hermes_main, "PROJECT_ROOT", repo)
+    # ensure_uv() must never run for real here: on a HERMES_HOME with no cached
+    # uv it installs one and then calls managed_uv.repair_vulnerable_runtime()
+    # with no project_root, which targets the real checkout (managed_uv's own
+    # _PROJECT_ROOT), not this fixture repo.
+    monkeypatch.setattr("hermes_cli.managed_uv.ensure_uv", lambda **_k: "uv")
+    monkeypatch.setattr("hermes_cli.managed_uv.resolve_uv", lambda: "uv")
     monkeypatch.setattr(hermes_main, "_resolve_update_branch", lambda args: "main")
     monkeypatch.setattr(hermes_main, "_is_windows", lambda: False)
     monkeypatch.setattr(
