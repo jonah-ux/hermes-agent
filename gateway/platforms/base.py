@@ -654,6 +654,11 @@ from enum import Enum
 from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
+def _existing_paths(paths):
+    """Blocking filesystem existence check; call via ``asyncio.to_thread`` from async code."""
+    return [str(p) for p in paths if p and Path(p).exists()]
+
+
 from gateway.config import Platform, PlatformConfig
 from gateway.session import SessionSource, build_session_key
 from hermes_constants import get_default_hermes_root, get_hermes_dir, get_hermes_home
@@ -6765,10 +6770,9 @@ class BasePlatformAdapter(ABC):
                                 raw_tts_paths = tts_data.get("file_paths") or [
                                     tts_data.get("file_path")
                                 ]
-                                _tts_paths = [
-                                    str(path) for path in raw_tts_paths
-                                    if path and Path(path).exists()
-                                ]
+                                _tts_paths = await asyncio.to_thread(
+                                    _existing_paths, raw_tts_paths
+                                )
                                 _tts_path = _tts_paths[0] if _tts_paths else None
                     except Exception as tts_err:
                         logger.warning("[%s] Auto-TTS failed: %s", self.name, tts_err)

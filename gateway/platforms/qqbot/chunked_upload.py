@@ -197,6 +197,11 @@ circular imports and keep this module testable in isolation.
 """
 
 
+def _stat_size(path: "Path") -> int:
+    """Blocking stat call; call via ``asyncio.to_thread`` from async code."""
+    return path.stat().st_size
+
+
 class ChunkedUploader:
     """Run the prepare → PUT parts → complete sequence.
 
@@ -245,7 +250,7 @@ class ChunkedUploader:
             )
 
         path = Path(file_path)
-        file_size = path.stat().st_size
+        file_size = await asyncio.to_thread(_stat_size, path)
 
         logger.info(
             "[%s] Chunked upload start: file=%s size=%s type=%d",

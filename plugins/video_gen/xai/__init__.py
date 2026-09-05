@@ -200,6 +200,11 @@ def _xai_video_output_urls(
     return public_video_url, temporary_out, stored_public
 
 
+def _local_video_file_exists(ref: str) -> bool:
+    """Blocking path check; call via ``asyncio.to_thread`` from async code."""
+    return Path(ref).expanduser().is_file()
+
+
 def _video_ref_to_xai_url(value: str) -> str:
     """Return a URL/data URI accepted by xAI for video inputs."""
     ref = (value or "").strip()
@@ -234,8 +239,7 @@ async def _video_input_from_public_url(
     if not ref:
         return None
 
-    path = Path(ref).expanduser()
-    if path.is_file():
+    if await asyncio.to_thread(_local_video_file_exists, ref):
         data_ref = _video_ref_to_xai_url(ref)
         return {"url": data_ref} if data_ref else None
 

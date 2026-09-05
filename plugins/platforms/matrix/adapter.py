@@ -145,6 +145,11 @@ logger = logging.getLogger(__name__)
 _MATRIX_VOICE_WAVEFORM_BINS = 30
 
 
+def _expand_local_path(file_path: str) -> Path:
+    """Blocking ``~`` expansion via pathlib; call via ``asyncio.to_thread`` from async code."""
+    return Path(file_path).expanduser()
+
+
 def _matrix_voice_metadata_for_file(path: Path) -> Dict[str, Any]:
     """Return best-effort Matrix voice metadata for an audio file.
 
@@ -2994,7 +2999,7 @@ class MatrixAdapter(BasePlatformAdapter):
         is_voice: bool = False,
     ) -> SendResult:
         """Read a local file and upload it."""
-        p = Path(file_path).expanduser()
+        p = await asyncio.to_thread(_expand_local_path, file_path)
         if not p.exists():
             # file_path is a host-local path; never echo it into chat.
             logger.warning(
