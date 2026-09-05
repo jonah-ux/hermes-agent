@@ -413,8 +413,14 @@ class TestDelegateTask(unittest.TestCase):
                 child_db = kwargs["session_db"]
                 self.assertIsInstance(child_db, SessionDB)
                 self.assertIsNot(child_db, parent_db)
+                # hermes_state_registry.acquire() resolves the incoming path (canonical
+                # file-identity dedup, e.g. macOS /var -> /private/var symlinks) before
+                # opening/returning the child handle, while parent_db.db_path here is
+                # the raw tempfile.TemporaryDirectory() path handed in unresolved. Compare
+                # resolved paths so this asserts the documented "same db FILE" invariant
+                # instead of an incidental string form.
                 self.assertEqual(
-                    str(child_db.db_path), str(parent_db.db_path)
+                    Path(child_db.db_path).resolve(), Path(parent_db.db_path).resolve()
                 )
             finally:
                 if child_db is not None:

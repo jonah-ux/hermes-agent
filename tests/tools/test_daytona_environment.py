@@ -59,6 +59,15 @@ def daytona_sdk(monkeypatch):
 @pytest.fixture()
 def make_env(daytona_sdk, monkeypatch):
     """Factory that creates a DaytonaEnvironment with a mocked SDK."""
+    # DaytonaEnvironment.__init__ calls ensure_lazy_dep("terminal.daytona") before importing
+    # the (here mocked-via-sys.modules) `daytona` package. ensure_lazy_dep does a REAL
+    # importlib.metadata package-presence check, unrelated to the sys.modules injection above,
+    # so with security.allow_lazy_installs=false and the real `daytona` PyPI package genuinely
+    # absent, every construction raised FeatureUnavailable before ever reaching the mocked SDK.
+    # Bypass the gate directly, matching the same pattern used by
+    # test_browser_chromium_autoinstall.py / test_lazy_deps*.py / test_wake_word.py for this
+    # exact class of lazy-dependency gate.
+    monkeypatch.setattr("tools.environments.daytona.ensure_lazy_dep", lambda feature: None)
     # Prevent is_interrupted from interfering — patch where it's used (base.py)
     monkeypatch.setattr("tools.environments.base.is_interrupted", lambda: False)
     # Prevent skills/credential sync from consuming mock exec calls
