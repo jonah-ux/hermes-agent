@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import re
@@ -340,7 +341,7 @@ async def download_transcript_text(
             destination,
             headers={"Accept": "text/vtt"},
         )
-        text = destination.read_text(encoding=encoding).strip()
+        text = (await asyncio.to_thread(destination.read_text, encoding=encoding)).strip()
     except MicrosoftGraphAPIError as exc:
         raise _wrap_graph_error(
             exc,
@@ -350,7 +351,7 @@ async def download_transcript_text(
         ) from exc
     finally:
         try:
-            destination.unlink(missing_ok=True)
+            await asyncio.to_thread(destination.unlink, missing_ok=True)
         except OSError:
             pass
 

@@ -881,7 +881,7 @@ async def _send_live_adapter_media(
         is_voice = bool(descriptor[1]) if len(descriptor) > 1 else False
         if not isinstance(media_path, str) or not media_path:
             return {"error": f"Adapter media send failed: invalid media descriptor {index + 1}/{total}"}
-        if not os.path.exists(media_path):
+        if not await asyncio.to_thread(os.path.exists, media_path):
             return {"error": f"Adapter media send failed: media file {index + 1}/{total} was not found"}
 
         ext = os.path.splitext(media_path)[1].lower()
@@ -1725,7 +1725,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
                         raise
 
         for media_path, is_voice in media_files:
-            if not os.path.exists(media_path):
+            if not await asyncio.to_thread(os.path.exists, media_path):
                 warning = f"Media file not found, skipping: {media_path}"
                 logger.warning(warning)
                 warnings.append(warning)
@@ -1748,7 +1748,8 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
 
             ext = os.path.splitext(media_path)[1].lower()
             try:
-                with open(media_path, "rb") as f:
+                f = await asyncio.to_thread(open, media_path, "rb")
+                try:
                     media_kwargs = dict(thread_kwargs)
                     # Attach the MEDIA:<path> caption to the bubble itself for
                     # captionable kinds (photo/video/document). _tg_caption is
@@ -1850,6 +1851,8 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
                                 )
                         else:
                             raise
+                finally:
+                    await asyncio.to_thread(f.close)
             except Exception as e:
                 warning = _sanitize_error_text(f"Failed to send media {media_path}: {e}")
                 logger.error(warning)
@@ -2013,7 +2016,7 @@ async def _send_signal(extra, chat_id, message, media_files=None):
         valid_media = media_files or []
         attachment_paths = []
         for media_path, _is_voice in valid_media:
-            if os.path.exists(media_path):
+            if await asyncio.to_thread(os.path.exists, media_path):
                 attachment_paths.append(media_path)
             else:
                 logger.warning("Signal media file not found, skipping: %s", media_path)
@@ -2261,7 +2264,7 @@ async def _matrix_send_core(adapter, chat_id, message, media_files, metadata):
             return _error(f"Matrix send failed: {last_result.error}")
 
     for media_path, is_voice in media_files:
-        if not os.path.exists(media_path):
+        if not await asyncio.to_thread(os.path.exists, media_path):
             return _error(f"Media file not found: {media_path}")
 
         ext = os.path.splitext(media_path)[1].lower()

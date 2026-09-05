@@ -236,6 +236,11 @@ def preprocess_context_references(
     return asyncio.run(coro)
 
 
+def _expanduser_and_resolve(path: str | Path) -> Path:
+    """Sync helper for ``Path.expanduser().resolve()`` (blocking stat calls)."""
+    return Path(path).expanduser().resolve()
+
+
 async def preprocess_context_references_async(
     message: str,
     *,
@@ -248,11 +253,13 @@ async def preprocess_context_references_async(
     if not refs:
         return ContextReferenceResult(message=message, original_message=message)
 
-    cwd_path = Path(cwd).expanduser().resolve()
+    cwd_path = await asyncio.to_thread(_expanduser_and_resolve, cwd)
     # Default to the current working directory so @ references cannot escape
     # the active workspace unless a caller explicitly widens the root.
     allowed_root_path = (
-        Path(allowed_root).expanduser().resolve() if allowed_root is not None else cwd_path
+        await asyncio.to_thread(_expanduser_and_resolve, allowed_root)
+        if allowed_root is not None
+        else cwd_path
     )
     warnings: list[str] = []
     blocks: list[str] = []

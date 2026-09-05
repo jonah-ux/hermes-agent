@@ -2103,13 +2103,13 @@ async def video_analyze_tool(
         resolved_url = video_url
         if resolved_url.startswith("file://"):
             resolved_url = resolved_url[len("file://"):]
-        local_path = Path(os.path.expanduser(resolved_url))
+        local_path = Path(await asyncio.to_thread(os.path.expanduser, resolved_url))
 
         if not _terminal_backend_is_local() and _is_path_like_video_source(video_url):
             logger.info("Reading video source via terminal backend: %s", video_url)
             temp_video_path = await _materialize_video_from_terminal_backend(video_url, task_id)
             should_cleanup = True
-        elif local_path.is_file():
+        elif await asyncio.to_thread(local_path.is_file):
             from agent.file_safety import raise_if_read_blocked
             raise_if_read_blocked(str(local_path))
             logger.info("Using local video file: %s", video_url)

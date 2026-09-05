@@ -120,7 +120,7 @@ async def resolve_image_source(
     # Everything else is a filesystem path — including bare relative names
     # like "pic.png" (accepted on main; a path-shape gate here regressed them).
     candidate = s[len("file://"):] if s.lower().startswith("file://") else s
-    p = Path(os.path.expanduser(candidate))
+    p = Path(await asyncio.to_thread(os.path.expanduser, candidate))
     # Confinement decision (see module docstring). Under a non-local backend
     # a path is host-readable ONLY if it lands in a media cache (after
     # translating a container-visible cache path back to its host mount);
@@ -206,7 +206,7 @@ async def _download_to_bytes(url: str) -> bytes:
     except PermissionError as exc:  # website policy block
         raise SourceUnsafe(str(exc), src=url, origin="http") from exc
     finally:
-        tmp.unlink(missing_ok=True)
+        await asyncio.to_thread(tmp.unlink, missing_ok=True)
 
 
 def _is_local_terminal_backend() -> bool:
