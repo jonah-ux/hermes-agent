@@ -100,13 +100,37 @@ def matrix_env(tmp_path, monkeypatch):
     async def _no_sleep(*a, **k): return None
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
 
-    # Reset FAL plugin's lazy fal_client cache so it picks up the stub
-    from plugins.video_gen import fal as fal_plugin
-    fal_plugin._fal_client = None
-
-    # Force discovery
+    # Force discovery. This must happen BEFORE seeding the fal_client cache below:
+    # hermes_cli/plugins_loader.py's _load_directory_module() execs each plugin's
+    # __init__.py fresh under its own dynamic module name (``hermes_plugins.<slug>``,
+    # via importlib.util.spec_from_file_location + module_from_spec), which is a
+    # DIFFERENT module object than the one you get from a normal package import
+    # (``from plugins.video_gen import fal``). Patching the package-imported module's
+    # ``_fal_client`` global therefore has zero effect on the module the registry
+    # actually invokes — confirmed by comparing object identity:
+    # ``sys.modules[type(provider).__module__] is not fal_plugin`` (True: they differ).
     from hermes_cli.plugins import _ensure_plugins_discovered
     _ensure_plugins_discovered(force=True)
+
+    # Point the FAL plugin's lazy fal_client cache directly at the stub module.
+    #
+    # _load_fal_client() only calls tools.fal_common.import_fal_client() when its
+    # cached global is still None; import_fal_client() runs the real dependency
+    # first (tools.lazy_deps.ensure("image.fal", ...) — a pip-metadata check that
+    # a sys.modules stub can never satisfy) before it ever reaches the plain
+    # ``import fal_client`` that would pick up our stub. In this dev venv
+    # fal-client isn't actually pip-installed, so resetting the cache to None
+    # made every call re-run that real check and fail with "not installed"
+    # before the stub was ever consulted (see test_managed_media_gateways.py's
+    # analogous fix for tools.image_generation_tool). Seed the cache on the module
+    # that is ACTUALLY registered (looked up via the active provider, not the
+    # package import — see the discovery-ordering note above) so
+    # _load_fal_client() short-circuits to our fake instead of the real package.
+    import sys
+    from agent import video_gen_registry
+    fal_provider = video_gen_registry._registry.merged().get("fal")
+    if fal_provider is not None:
+        sys.modules[type(fal_provider).__module__]._fal_client = fake_fal
 
     return tmp_path, fal_calls, xai_calls
 
