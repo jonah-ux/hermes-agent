@@ -537,6 +537,17 @@ def _resolve_cli_path(configured: str = "") -> str:
     return str(fallback) if fallback.is_file() else ""
 
 
+def _expanduser_and_is_file(path_str: str) -> Tuple[Path, bool]:
+    """Resolve ``~`` in a local path and check whether it is an existing file.
+
+    ``Path.expanduser`` and ``Path.is_file`` are both blocking filesystem
+    calls; callers on the gateway event loop must run this through
+    ``asyncio.to_thread`` rather than calling it inline.
+    """
+    local = Path(path_str).expanduser()
+    return local, local.is_file()
+
+
 def _credentials_candidates(extra: Optional[dict] = None) -> List[Path]:
     # Scope-aware read (#98738/#95216): inside a secondary profile scope the
     # scope is authoritative (a miss falls to the profile's own config extra,
@@ -1494,8 +1505,8 @@ class BuzzAdapter(BasePlatformAdapter):
         metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
         """Upload one local file through the Buzz CLI and verify its receipt."""
-        local = Path(file_path).expanduser()
-        if not local.is_file():
+        local, is_local_file = await asyncio.to_thread(_expanduser_and_is_file, file_path)
+        if not is_local_file:
             return SendResult(success=False, error="Media file not found")
         args = [
             "messages", "send",
@@ -1531,8 +1542,11 @@ class BuzzAdapter(BasePlatformAdapter):
         metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
         """Send an image: local files upload via --file, URLs go as a link."""
-        local = Path(image_url).expanduser() if not image_url.startswith(("http://", "https://")) else None
-        if local is not None and local.is_file():
+        if not image_url.startswith(("http://", "https://")):
+            local, is_local_file = await asyncio.to_thread(_expanduser_and_is_file, image_url)
+        else:
+            local, is_local_file = None, False
+        if local is not None and is_local_file:
             return await self._send_file_attachment(
                 chat_id,
                 local,
@@ -1561,8 +1575,8 @@ class BuzzAdapter(BasePlatformAdapter):
         verified the file — a second probe could race into a false
         "not found" if the file disappears between checks (#74999).
         """
-        local = Path(file_path).expanduser()
-        if probe and not local.is_file():
+        local, is_local_file = await asyncio.to_thread(_expanduser_and_is_file, file_path)
+        if probe and not is_local_file:
             # Never leak host filesystem paths into chat-visible errors.
             return SendResult(success=False, error="Media file not found")
         args = [
@@ -1604,8 +1618,8 @@ class BuzzAdapter(BasePlatformAdapter):
         Missing or non-file paths retain the Base fallback so host
         filesystem paths are never echoed into chat (#74999).
         """
-        local = Path(image_path).expanduser()
-        if local.is_file():
+        local, is_local_file = await asyncio.to_thread(_expanduser_and_is_file, image_path)
+        if is_local_file:
             return await self._send_file_attachment(
                 chat_id,
                 local,

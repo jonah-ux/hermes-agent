@@ -374,6 +374,28 @@ def _find_discord_windows_bundled_opus(discord_module: Any = None) -> Optional[s
     return None
 
 
+def _first_existing_path(paths: Tuple[str, ...]) -> Optional[str]:
+    """Return the first path in ``paths`` that exists as a file, if any.
+
+    Blocking (``os.path.isfile``); callers on the gateway event loop must
+    run it through ``asyncio.to_thread``.
+    """
+    for candidate in paths:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _read_file_bytes(path: str) -> bytes:
+    """Read a whole file's contents synchronously.
+
+    ``open()``/``read()`` are blocking; callers on the gateway event loop
+    must run this through ``asyncio.to_thread``.
+    """
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
 class _DiscordNonConversationalMessageTracker:
     """Persistent bounded set of Discord message IDs that are status noise."""
 
@@ -1337,10 +1359,9 @@ class DiscordAdapter(BasePlatformAdapter):
                     "/usr/local/lib/libopus.dylib",     # Intel Mac
                 )
                 if sys.platform == "darwin":
-                    for _hp in _homebrew_paths:
-                        if os.path.isfile(_hp):
-                            opus_candidates.append(_hp)
-                            break
+                    _found_hp = await asyncio.to_thread(_first_existing_path, _homebrew_paths)
+                    if _found_hp:
+                        opus_candidates.append(_found_hp)
             for opus_path in opus_candidates:
                 try:
                     discord.opus.load_opus(opus_path)
@@ -4040,7 +4061,7 @@ class DiscordAdapter(BasePlatformAdapter):
         if not self._client:
             return SendResult(success=False, error="Not connected")
 
-        if not os.path.isfile(file_path):
+        if not await asyncio.to_thread(os.path.isfile, file_path):
             return SendResult(success=False, error=f"File not found: {file_path}")
 
         channel = self._client.get_channel(int(chat_id))
@@ -4148,7 +4169,7 @@ class DiscordAdapter(BasePlatformAdapter):
                         captions.append(alt_text)
                     if image_url.startswith("file://"):
                         local_path = _unquote(image_url[7:])
-                        if not os.path.exists(local_path):
+                        if not await asyncio.to_thread(os.path.exists, local_path):
                             logger.warning("[%s] Skipping missing image: %s", self.name, local_path)
                             continue
                         files.append(_discord_mod.File(local_path, filename=os.path.basename(local_path)))
@@ -4258,7 +4279,7 @@ class DiscordAdapter(BasePlatformAdapter):
             if not channel:
                 return SendResult(success=False, error=f"Channel {chat_id} not found")
 
-            if not os.path.exists(audio_path):
+            if not await asyncio.to_thread(os.path.exists, audio_path):
                 return SendResult(success=False, error=f"Audio file not found: {audio_path}")
 
             filename = os.path.basename(audio_path)
@@ -4266,8 +4287,7 @@ class DiscordAdapter(BasePlatformAdapter):
             # ids-only reference — same no-fetch rationale as the text path.
             reference = self._reply_reference_for_send(reply_to, channel)
 
-            with open(audio_path, "rb") as f:
-                file_data = f.read()
+            file_data = await asyncio.to_thread(_read_file_bytes, audio_path)
 
             # Forum channels (type 15) reject direct POST /messages — the
             # native voice flag path also targets /messages so it would fail
@@ -4580,7 +4600,7 @@ class DiscordAdapter(BasePlatformAdapter):
             )
             result = json.loads(result_json)
             actual = result.get("file_path", audio_path)
-            if not result.get("success") or not os.path.isfile(actual):
+            if not result.get("success") or not await asyncio.to_thread(os.path.isfile, actual):
                 return False
             try:
                 from voice_mixer import decode_to_pcm
@@ -4600,7 +4620,7 @@ class DiscordAdapter(BasePlatformAdapter):
             return False
         finally:
             for p in {audio_path, locals().get("actual")}:
-                if p and os.path.isfile(p):
+                if p and await asyncio.to_thread(os.path.isfile, p):
                     try:
                         os.unlink(p)
                     except OSError:
@@ -10186,7 +10206,7 @@ async def _standalone_send(
                 # right code path (JSON vs multipart) before opening a session.
                 valid_media = []
                 for media_path, _is_voice in media_files:
-                    if not os.path.exists(media_path):
+                    if not await asyncio.to_thread(os.path.exists, media_path):
                         warning = f"Media file not found, skipping: {media_path}"
                         logger.warning(warning)
                         warnings.append(warning)
@@ -10210,12 +10230,12 @@ async def _standalone_send(
 
                         try:
                             for idx, media_path in enumerate(valid_media):
-                                with open(media_path, "rb") as fh:
-                                    form.add_field(
-                                        f"files[{idx}]",
-                                        fh.read(),
-                                        filename=os.path.basename(media_path),
-                                    )
+                                file_bytes = await asyncio.to_thread(_read_file_bytes, media_path)
+                                form.add_field(
+                                    f"files[{idx}]",
+                                    file_bytes,
+                                    filename=os.path.basename(media_path),
+                                )
                             async with session.post(thread_url, headers=auth_headers, data=form, **_req_kw) as resp:
                                 if resp.status not in {200, 201}:
                                     body = await _standalone_read_text_limited(
@@ -10290,7 +10310,7 @@ async def _standalone_send(
             # message rather than silently dropping the text.
             caption_pending = bool(caption)
             for media_path, _is_voice in media_files:
-                if not os.path.exists(media_path):
+                if not await asyncio.to_thread(os.path.exists, media_path):
                     warning = f"Media file not found, skipping: {media_path}"
                     logger.warning(warning)
                     warnings.append(warning)
@@ -10318,22 +10338,22 @@ async def _standalone_send(
                             content_type="application/json",
                         )
                         caption_pending = False
-                    with open(media_path, "rb") as f:
-                        form.add_field("files[0]", f, filename=filename)
-                        async with session.post(url, headers=auth_headers, data=form, **_req_kw) as resp:
-                            if resp.status not in {200, 201}:
-                                body = await _standalone_read_text_limited(
-                                    resp,
-                                    _DISCORD_STANDALONE_ERROR_BODY_LIMIT_BYTES,
-                                )
-                                warning = _standalone_sanitize_error(f"Failed to send media {media_path}: Discord API error ({resp.status}): {body}")
-                                logger.error(warning)
-                                warnings.append(warning)
-                                continue
-                            last_data = await _standalone_read_json_limited(
+                    file_bytes = await asyncio.to_thread(_read_file_bytes, media_path)
+                    form.add_field("files[0]", file_bytes, filename=filename)
+                    async with session.post(url, headers=auth_headers, data=form, **_req_kw) as resp:
+                        if resp.status not in {200, 201}:
+                            body = await _standalone_read_text_limited(
                                 resp,
-                                _DISCORD_STANDALONE_JSON_BODY_LIMIT_BYTES,
+                                _DISCORD_STANDALONE_ERROR_BODY_LIMIT_BYTES,
                             )
+                            warning = _standalone_sanitize_error(f"Failed to send media {media_path}: Discord API error ({resp.status}): {body}")
+                            logger.error(warning)
+                            warnings.append(warning)
+                            continue
+                        last_data = await _standalone_read_json_limited(
+                            resp,
+                            _DISCORD_STANDALONE_JSON_BODY_LIMIT_BYTES,
+                        )
                 except Exception as e:
                     warning = _standalone_sanitize_error(f"Failed to send media {media_path}: {e}")
                     logger.error(warning)
