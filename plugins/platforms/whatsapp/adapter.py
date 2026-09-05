@@ -562,7 +562,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             return False
         
         bridge_path = Path(self._bridge_script)
-        if not bridge_path.exists():
+        if not await asyncio.to_thread(bridge_path.exists):
             logger.warning("[%s] Bridge script not found: %s", self.name, bridge_path)
             self._set_fatal_error(
                 "whatsapp_bridge_missing",
@@ -630,7 +630,8 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                     # Read timeout from environment variable, default to 300 seconds (5 minutes)
                     # to accommodate slower systems like Unraid NAS
                     npm_install_timeout = env_int("WHATSAPP_NPM_INSTALL_TIMEOUT", 300)
-                    install_result = subprocess.run(
+                    install_result = await asyncio.to_thread(
+                        subprocess.run,
                         [_npm_bin, "install", "--silent"],
                         cwd=str(bridge_dir),
                         capture_output=True,
@@ -724,7 +725,9 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             # messages are preserved for troubleshooting.
             whatsapp_mode = _wenv("WHATSAPP_MODE", "self-chat")
             self._bridge_log = self._session_path.parent / "bridge.log"
-            bridge_log_fh = open(self._bridge_log, "a", encoding="utf-8")
+            bridge_log_fh = await asyncio.to_thread(
+                open, self._bridge_log, "a", encoding="utf-8"
+            )
             self._bridge_log_fh = bridge_log_fh
 
             # Build bridge subprocess environment.
@@ -774,7 +777,8 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             bridge_env["HERMES_AUDIO_CACHE_DIR"] = str(_get_audio_dir())
             bridge_env["HERMES_DOCUMENT_CACHE_DIR"] = str(_get_doc_dir())
 
-            self._bridge_process = subprocess.Popen(
+            self._bridge_process = await asyncio.to_thread(
+                subprocess.Popen,
                 [
                     find_node_executable("node") or "node",
                     str(bridge_path),
@@ -1086,7 +1090,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         try:
             import aiohttp
 
-            if not os.path.exists(file_path):
+            if not await asyncio.to_thread(os.path.exists, file_path):
                 return SendResult(success=False, error=f"File not found: {file_path}")
 
             payload: Dict[str, Any] = {
@@ -1634,11 +1638,15 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                     ext = Path(doc_path).suffix.lower()
                     if ext in {".txt", ".md", ".csv", ".json", ".xml", ".yaml", ".yml", ".log", ".py", ".js", ".ts", ".html", ".css"}:
                         try:
-                            file_size = Path(doc_path).stat().st_size
+                            file_stat = await asyncio.to_thread(Path(doc_path).stat)
+                            file_size = file_stat.st_size
                             if file_size > MAX_TEXT_INJECT_BYTES:
                                 print(f"[{self.name}] Skipping text injection for {doc_path} ({file_size} bytes > {MAX_TEXT_INJECT_BYTES})", flush=True)
                                 continue
-                            content = Path(doc_path).read_text(encoding="utf-8", errors="replace")
+                            content = await asyncio.to_thread(
+                                Path(doc_path).read_text,
+                                encoding="utf-8", errors="replace",
+                            )
                             fname = Path(doc_path).name
                             # Remove the doc_<hex>_ prefix for display
                             display_name = fname
@@ -1791,7 +1799,7 @@ async def _standalone_send(
             # so PNG/JPEG/WebP/GIF arrive as inline images, MP4 as a video
             # bubble, and ogg/opus as a voice note — not a file/document.
             for media_path, is_voice in media:
-                if not os.path.exists(media_path):
+                if not await asyncio.to_thread(os.path.exists, media_path):
                     # If the text was suppressed to ride as this file's caption
                     # (caption mode), the words would otherwise be lost when the
                     # file is missing — deliver the caption as a plain message
