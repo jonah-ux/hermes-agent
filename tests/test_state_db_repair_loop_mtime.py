@@ -26,7 +26,10 @@ import shutil
 import sqlite3
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
 
 import hermes_state
 from hermes_state import (
@@ -41,6 +44,23 @@ from hermes_state import (
     _record_repair_outcome,
     _repair_backup_headroom_bytes,
 )
+
+
+@pytest.fixture(autouse=True)
+def _roomy_disk(monkeypatch):
+    """Pin free-space to ample headroom by default for every test in this module.
+
+    Most tests here exercise fingerprint/dedupe *content* logic, not the
+    free-space guard itself (that guard has its own dedicated tests below,
+    which still override this via their own ``with patch("shutil.disk_usage",
+    ...)`` context manager). Without this, ``_backup_db_file`` hits the real
+    filesystem the suite runs on, and on a machine with less than ~2% of its
+    *total* volume free, ``_backup_free_space_error`` (hermes_state_repair.py)
+    refuses the backup — turning a dedupe/fingerprint assertion failure into a
+    disk-space-guard failure with no connection to the behavior under test.
+    """
+    roomy = SimpleNamespace(total=500_000_000_000, used=0, free=400_000_000_000)
+    monkeypatch.setattr(shutil, "disk_usage", lambda *_a, **_kw: roomy)
 
 
 def _damaged_db(tmp_path: Path, size: int = 200_000) -> Path:

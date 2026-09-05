@@ -280,9 +280,9 @@ def _make_monitor_job(hermes_env, script_body: str):
 def test_first_run_always_runs_agent(hermes_env, monkeypatch):
     from cron.scheduler import run_job
 
-    job = _make_monitor_job(hermes_env, "echo 'state A'\n")
     observed: dict = {}
     _install_agent_stubs(monkeypatch, observed)
+    job = _make_monitor_job(hermes_env, "echo 'state A'\n")
 
     success, doc, final, error = run_job(job)
     assert success is True
@@ -296,9 +296,9 @@ def test_unchanged_output_suppresses_agent_run(hermes_env, monkeypatch):
     from cron.jobs import get_job
     from cron.scheduler import SILENT_MARKER, run_job
 
-    job = _make_monitor_job(hermes_env, "echo 'state A'\n")
     observed: dict = {}
     _install_agent_stubs(monkeypatch, observed)
+    job = _make_monitor_job(hermes_env, "echo 'state A'\n")
 
     run_job(job)
     assert observed["agent_runs"] == 1
@@ -317,9 +317,9 @@ def test_changed_output_injects_diff(hermes_env, monkeypatch):
     from cron.jobs import get_job
     from cron.scheduler import run_job
 
-    job = _make_monitor_job(hermes_env, "echo 'state A'\n")
     observed: dict = {}
     _install_agent_stubs(monkeypatch, observed)
+    job = _make_monitor_job(hermes_env, "echo 'state A'\n")
 
     run_job(job)
 
@@ -342,9 +342,9 @@ def test_hash_persists_across_scheduler_restart(hermes_env, monkeypatch):
 
     from cron.scheduler import run_job
 
-    job = _make_monitor_job(hermes_env, "echo 'state A'\n")
     observed: dict = {}
     _install_agent_stubs(monkeypatch, observed)
+    job = _make_monitor_job(hermes_env, "echo 'state A'\n")
 
     run_job(job)
     assert observed["agent_runs"] == 1
@@ -370,9 +370,9 @@ def test_monitor_script_failure_is_error_not_change(hermes_env, monkeypatch):
     from cron.jobs import get_job
     from cron.scheduler import run_job
 
-    job = _make_monitor_job(hermes_env, "echo 'state A'\n")
     observed: dict = {}
     _install_agent_stubs(monkeypatch, observed)
+    job = _make_monitor_job(hermes_env, "echo 'state A'\n")
 
     run_job(job)
     stored_hash = get_job(job["id"])["monitor_state"]["last_output_hash"]

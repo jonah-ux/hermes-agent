@@ -20,9 +20,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
 
 import hermes_state
 from hermes_state import (
@@ -36,6 +40,22 @@ from hermes_state import (
     _repair_ledger_path,
     repair_state_db_schema,
 )
+
+
+@pytest.fixture(autouse=True)
+def _roomy_disk(monkeypatch):
+    """Pin free-space to ample headroom for every test in this module.
+
+    ``repair_state_db_schema`` refuses to back up or repair when
+    ``shutil.disk_usage`` (hermes_state_repair.py) reports less than ~2% of
+    the *total* volume free. On any machine where the real disk this test
+    suite runs on is tight, that guard silently turns "repair succeeded" /
+    "attempt recorded" assertions into "repair was refused" failures that
+    have nothing to do with the attempt-ledger/backup-dedupe logic under test
+    here.
+    """
+    roomy = SimpleNamespace(total=500_000_000_000, used=0, free=400_000_000_000)
+    monkeypatch.setattr(shutil, "disk_usage", lambda *_a, **_kw: roomy)
 
 
 def _make_unrepairable_db(tmp_path: Path) -> Path:

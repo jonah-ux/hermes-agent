@@ -236,16 +236,34 @@ class TestConnectionLifecycle:
         ]
 
     def test_failed_read_only_open_does_not_leak_tracked_connection(
-        self, tmp_path
+        self, tmp_path, monkeypatch
     ):
         """A malformed store makes the RO FTS probe raise DatabaseError.
         The connection must be closed on that failure path: a leaked tracked
         connection blocks _backup_db_file's raw-copy for the process
         lifetime, so the writable heal that follows would repair WITHOUT its
         forensic backup."""
+        import shutil
         import sqlite3
+        from types import SimpleNamespace
 
         from hermes_cli.sqlite_safe_read import has_live_connection
+
+        # The final "writable heal" step below exercises hermes_state_repair's
+        # real (unmocked) repair logic — but its forensic-backup disk guard
+        # (_backup_free_space_error / _repair_backup_headroom_bytes in
+        # hermes_state_repair.py) needs ~2% of the *volume's total* size free
+        # (min 256MiB) before it will run the backup at all. That guard is
+        # deliberate production behavior (a refused backup is an intentional
+        # HARD STOP on a near-full disk, not a bug), but it means this test's
+        # pass/fail would otherwise depend on how full the host machine's
+        # disk happens to be — nothing to do with the connection-leak
+        # behavior under test. Pin free-space to ample headroom the same way
+        # test_state_db_repair_loop_cap.py / _loop_mtime.py /
+        # _non_destructive.py do, so the guard sees plenty of room and the
+        # heal always proceeds regardless of the real host disk.
+        roomy = SimpleNamespace(total=500_000_000_000, used=0, free=400_000_000_000)
+        monkeypatch.setattr(shutil, "disk_usage", lambda *_a, **_kw: roomy)
 
         db_path = tmp_path / "state.db"
         writable = SessionDB(db_path=db_path)
