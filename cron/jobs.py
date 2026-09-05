@@ -817,11 +817,11 @@ def normalize_repeat_value(repeat: Any) -> Optional[int]:
             return 1
         try:
             repeat = int(repeat_str)
-        except ValueError:
+        except ValueError as e:
             raise ValueError(
                 f"Invalid repeat value {repeat!r}: use an integer, "
                 f"'forever', or 'once'."
-            )
+            ) from e
     return None if repeat <= 0 else int(repeat)
 
 
@@ -997,7 +997,7 @@ def parse_schedule(schedule: str) -> Dict[str, Any]:
             try:
                 croniter(cron_expr)
             except Exception as e:
-                raise ValueError(f"Invalid schedule '{original}': {e}")
+                raise ValueError(f"Invalid schedule '{original}': {e}") from e
             return {
                 "kind": "cron",
                 "expr": cron_expr,
@@ -1023,7 +1023,7 @@ def parse_schedule(schedule: str) -> Dict[str, Any]:
         try:
             croniter(cron_expr)
         except Exception as e:
-            raise ValueError(f"Invalid schedule '{original}': {e}")
+            raise ValueError(f"Invalid schedule '{original}': {e}") from e
         return {
             "kind": "cron",
             "expr": cron_expr,
@@ -1046,7 +1046,7 @@ def parse_schedule(schedule: str) -> Dict[str, Any]:
         try:
             croniter(schedule)
         except Exception as e:
-            raise ValueError(f"Invalid cron expression '{schedule}': {e}")
+            raise ValueError(f"Invalid cron expression '{schedule}': {e}") from e
         return {
             "kind": "cron",
             "expr": schedule,
@@ -1079,7 +1079,7 @@ def parse_schedule(schedule: str) -> Dict[str, Any]:
                 "display": f"once at {dt.strftime('%Y-%m-%d %H:%M')}"
             }
         except ValueError as e:
-            raise ValueError(f"Invalid timestamp '{schedule}': {e}")
+            raise ValueError(f"Invalid timestamp '{schedule}': {e}") from e
     
     # Duration like "30m", "2h", "1d" → RECURRING interval, matching the
     # documented tool contract ("30m (every 30 minutes)"). Previously this
@@ -1091,10 +1091,10 @@ def parse_schedule(schedule: str) -> Dict[str, Any]:
         duration_str = schedule[3:].strip()
         try:
             minutes = parse_duration(duration_str)
-        except ValueError:
+        except ValueError as e:
             raise ValueError(
                 f"Invalid duration '{duration_str}' after 'in '. Use e.g. 'in 30m', 'in 2h'."
-            )
+            ) from e
         run_at = _hermes_now() + timedelta(minutes=minutes)
         return {
             "kind": "once",
