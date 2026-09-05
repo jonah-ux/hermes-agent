@@ -1,4 +1,4 @@
-"""Regression tests for ``tools.transcription_local._load_local_whisper_model``'s
+"""Regression tests for ``tools.transcription_tools._load_local_whisper_model``'s
 Apple-Silicon/Rosetta CPU-forcing branch.
 
 ``_should_force_faster_whisper_cpu()`` exists to dodge a native abort: ctranslate2's
@@ -21,7 +21,7 @@ import types
 from unittest.mock import MagicMock, patch
 
 if "faster_whisper" not in sys.modules:
-    # tools.transcription_local does a late ``from faster_whisper import WhisperModel``
+    # tools.transcription_tools does a late ``from faster_whisper import WhisperModel``
     # inside _load_local_whisper_model; the real package is an optional STT extra that
     # isn't installed in every dev venv, so stub it the same way
     # test_transcription_tools.py does — a real module object in sys.modules with a
@@ -33,7 +33,7 @@ if "faster_whisper" not in sys.modules:
     faster_whisper_stub.__spec__ = ModuleSpec("faster_whisper", loader=None)
     sys.modules["faster_whisper"] = faster_whisper_stub
 
-import tools.transcription_local as tl
+import tools.transcription_tools as tl
 
 
 class TestForceCpuRespectsExplicitPins:

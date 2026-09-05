@@ -2369,12 +2369,12 @@ def _generate_minimax_tts(text: str, output_path: str, tts_config: Dict[str, Any
             if status_code != 0:
                 status_msg = base_resp.get("status_msg", "unknown error")
                 raise RuntimeError(f"MiniMax TTS API error (code {status_code}): {status_msg}")
-        except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
             response.raise_for_status()
             raise RuntimeError(
                 f"MiniMax TTS returned unexpected Content-Type '{content_type}' "
                 f"({len(raw_body) if 'raw_body' in locals() else 0} bytes)"
-            )
+            ) from e
 
         raise RuntimeError("MiniMax TTS returned no audio data")
 
@@ -3910,10 +3910,10 @@ def text_to_speech_tool(
             )
             try:
                 chunk_result = json.loads(raw_result)
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError) as e:
                 raise RuntimeError(
                     f"TTS chunk {index} returned invalid JSON: {str(raw_result)[:200]}"
-                )
+                ) from e
             if not chunk_result.get("success"):
                 error_msg = chunk_result.get("error", "unknown error")
                 return tool_error(

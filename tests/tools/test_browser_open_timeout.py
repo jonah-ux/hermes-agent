@@ -108,6 +108,13 @@ class TestCommandTimeoutRecovery:
 
         monkeypatch.setattr(bt, "_find_agent_browser", lambda: "agent-browser")
         monkeypatch.setattr(bt, "_requires_real_termux_browser_install", lambda _cmd: False)
+        # Preflight in _run_browser_command blocks local-mode commands when Chromium
+        # isn't installed, short-circuiting before Popen is ever called -- so on a
+        # sandbox without a real Chromium install this test would never reach the
+        # mocked timeout path at all and silently fail to exercise the recovery logic
+        # it's named for. Matches the same monkeypatch already used elsewhere in this
+        # suite that reaches preflight (e.g. test_browser_chromium_autoinstall.py).
+        monkeypatch.setattr(bt, "_chromium_installed", lambda: True)
         monkeypatch.setattr(bt, "_start_browser_cleanup_thread", lambda: None)
         monkeypatch.setattr(bt, "_ensure_cdp_supervisor", lambda _: supervisor_events.append("ensure"))
         monkeypatch.setattr(bt, "_stop_cdp_supervisor", lambda _: supervisor_events.append("stop"))

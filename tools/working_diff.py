@@ -31,17 +31,17 @@ VALID_MODES = ("working", "staged", "all")
 
 
 def _run(args: List[str], cwd: str, timeout: int = _GIT_TIMEOUT):
-    """Run git, returning (returncode, stdout). Never raises on git failure."""
+    """Run git, returning (returncode, stdout, stderr). Never raises on git failure."""
     proc = subprocess.run(
         ["git", "-c", "core.quotePath=false", *args],
         cwd=cwd, capture_output=True, text=True, timeout=timeout,
         encoding="utf-8", errors="replace",
     )
-    return proc.returncode, proc.stdout
+    return proc.returncode, proc.stdout, proc.stderr
 
 
 def _untracked_files(cwd: str) -> List[str]:
-    code, out = _run(["ls-files", "--others", "--exclude-standard"], cwd)
+    code, out, _ = _run(["ls-files", "--others", "--exclude-standard"], cwd)
     if code != 0:
         return []
     return [line for line in out.splitlines() if line.strip()]
@@ -54,7 +54,7 @@ def _untracked_diff(cwd: str, files: List[str]) -> str:
         try:
             # --no-index exits 1 when the files differ — that's the success
             # path here, so ignore the return code and keep the output.
-            _, out = _run(
+            _, out, _ = _run(
                 ["diff", "--no-index", "--", os.devnull, rel], cwd,
             )
             if out.strip():
@@ -85,11 +85,18 @@ def collect_working_diff(cwd: str, mode: str = "working",
         return {"success": False, "error": "git is not installed or not on PATH."}
 
     try:
-        code, _ = _run(["rev-parse", "--is-inside-work-tree"], cwd, timeout=5)
+        code, _, err = _run(["rev-parse", "--is-inside-work-tree"], cwd, timeout=5)
     except (subprocess.TimeoutExpired, OSError) as e:
         return {"success": False, "error": f"git failed: {e}"}
     if code != 0:
-        return {"success": False, "error": "Not a git repository."}
+        # git's own wording for the common case; anything else (permissions, a corrupt
+        # repo, a hardening rejection, ...) is surfaced verbatim instead of being papered
+        # over as "not a repository" — that collapsed distinct failures into a misleading
+        # message.
+        if "not a git repository" in err.lower():
+            return {"success": False, "error": "Not a git repository."}
+        detail = err.strip() or "no error output"
+        return {"success": False, "error": f"git rev-parse failed (exit {code}): {detail}"}
 
     if mode == "staged":
         base_args = ["diff", "--cached"]
@@ -101,8 +108,8 @@ def collect_working_diff(cwd: str, mode: str = "working",
     pathspec = ["--", *paths] if paths else []
 
     try:
-        _, stat_out = _run([*base_args, "--stat", *pathspec], cwd)
-        _, diff_out = _run([*base_args, *pathspec], cwd, timeout=_GIT_TIMEOUT * 2)
+        _, stat_out, _ = _run([*base_args, "--stat", *pathspec], cwd)
+        _, diff_out, _ = _run([*base_args, *pathspec], cwd, timeout=_GIT_TIMEOUT * 2)
 
         untracked: List[str] = []
         untracked_diff = ""

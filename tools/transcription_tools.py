@@ -1785,11 +1785,21 @@ def _load_local_whisper_model(model_name: str, device: str = "auto", compute_typ
 
     from faster_whisper import WhisperModel
     if force_cpu:
+        # The native abort this guards against is device="auto" picking CUDA on
+        # a host with no NVIDIA runtime -- only the *device* pick is unsafe, so
+        # only override it when the caller left it at the "auto" default. An
+        # explicitly pinned ``stt.local.device``/``compute_type`` (#9088) must
+        # still win here; blanket-overriding both to cpu/int8 silently discarded
+        # a user's pinned compute_type even on hosts that never needed the
+        # crash workaround.
+        safe_device = device if device != "auto" else "cpu"
+        safe_compute_type = compute_type if compute_type != "auto" else "int8"
         logger.info(
-            "Apple Silicon/Rosetta detected — loading faster-whisper on CPU "
-            "(int8) to avoid native device autodetection crashes"
+            "Apple Silicon/Rosetta detected — loading faster-whisper on %s "
+            "(%s) to avoid native device autodetection crashes",
+            safe_device, safe_compute_type,
         )
-        return WhisperModel(model_name, device="cpu", compute_type="int8")
+        return WhisperModel(model_name, device=safe_device, compute_type=safe_compute_type)
 
     try:
         return WhisperModel(model_name, device=device, compute_type=compute_type)

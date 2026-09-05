@@ -830,7 +830,7 @@ def _ensure_docker_available() -> None:
             timeout=5,
             stdin=subprocess.DEVNULL,
         )
-    except FileNotFoundError:
+    except FileNotFoundError as e:
         logger.error(
             "Docker backend selected but the resolved docker executable '%s' could "
             "not be executed.",
@@ -840,8 +840,8 @@ def _ensure_docker_available() -> None:
         raise EnvironmentConnectionError(
             "Docker executable could not be executed. Check your Docker installation.",
             retry_hint="Repair the Docker installation and retry.",
-        )
-    except subprocess.TimeoutExpired:
+        ) from e
+    except subprocess.TimeoutExpired as e:
         logger.error(
             "Docker backend selected but '%s version' timed out. "
             "The Docker daemon may not be running.",
@@ -854,7 +854,7 @@ def _ensure_docker_available() -> None:
                 "Start the Docker daemon (e.g. `systemctl start docker` or "
                 "launch Docker Desktop), then retry the same command."
             ),
-        )
+        ) from e
     except Exception:
         logger.error(
             "Unexpected error while checking Docker availability.",
