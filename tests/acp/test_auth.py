@@ -1,5 +1,7 @@
 """Tests for acp_adapter.auth — provider detection."""
 
+import pytest
+
 from acp_adapter.auth import (
     TERMINAL_SETUP_AUTH_METHOD_ID,
     build_auth_methods,
@@ -34,6 +36,7 @@ class TestDetectProvider:
 
 class TestBuildAuthMethods:
     def test_build_auth_methods_returns_provider_and_terminal_when_configured(self, monkeypatch):
+        pytest.importorskip("acp", reason="agent-client-protocol ('acp' pyproject extra) not installed in this environment")
         monkeypatch.setattr("acp_adapter.auth.detect_provider", lambda: "openrouter")
 
         methods = build_auth_methods()

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from run_agent import AIAgent
 
 
@@ -83,6 +85,10 @@ class TestNousFallbackLocalAvailability:
 
     def test_present_nous_token_allows_activation(self):
         """Nous is considered when token material exists."""
+        pytest.importorskip("anthropic")  # skip if optional SDK missing: the nous model here
+        # resolves to the anthropic_messages wire, and _swap_fallback_clients builds a real
+        # AnthropicAuxiliaryClient via build_anthropic_client() independent of the mocked
+        # resolve_provider_client above.
         agent = _make_agent(
             fallback_model=[
                 {"provider": "nous", "model": "anthropic/claude-sonnet-4.6"},

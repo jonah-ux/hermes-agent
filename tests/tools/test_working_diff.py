@@ -60,6 +60,43 @@ def test_unknown_mode_rejected(repo):
     assert "bogus" in result["error"]
 
 
+def test_non_repo_directory_reports_not_a_git_repository(tmp_path):
+    """A real non-repo directory hits git's actual ``not a git repository`` stderr."""
+    plain_dir = tmp_path / "not-a-repo"
+    plain_dir.mkdir()
+
+    result = collect_working_diff(str(plain_dir))
+
+    assert result == {"success": False, "error": "Not a git repository."}
+
+
+def test_rev_parse_failure_surfaces_real_stderr_not_generic_message(monkeypatch, repo):
+    """A rev-parse failure that ISN'T "not a git repository" must not be papered over.
+
+    Regression test: ``collect_working_diff`` used to map *any* non-zero
+    ``rev-parse --is-inside-work-tree`` exit code to the fixed literal
+    "Not a git repository.", discarding the real stderr/exit code. That masked
+    unrelated failures (permissions, a corrupted repo, a hardening rejection, ...)
+    behind a misleading message. Only git's own "not a git repository" wording
+    should collapse to that literal; anything else must surface the real cause.
+    """
+    real_run = working_diff._run
+
+    def fake_run(args, cwd, timeout=working_diff._GIT_TIMEOUT):
+        if args[:2] == ["rev-parse", "--is-inside-work-tree"]:
+            return 128, "", "fatal: unable to read config file: permission denied\n"
+        return real_run(args, cwd, timeout)
+
+    monkeypatch.setattr(working_diff, "_run", fake_run)
+
+    result = collect_working_diff(str(repo))
+
+    assert result["success"] is False
+    assert "Not a git repository" not in result["error"]
+    assert "128" in result["error"]
+    assert "permission denied" in result["error"]
+
+
 def test_run_decodes_git_output_as_utf8(monkeypatch, repo):
     """``_run`` must force UTF-8 decoding of git's output.
 

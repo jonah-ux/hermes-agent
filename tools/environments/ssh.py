@@ -129,14 +129,14 @@ class SSHEnvironment(BaseEnvironment):
                         "retry — the connection is re-established automatically."
                     ),
                 )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             raise EnvironmentConnectionError(
                 f"SSH connection to {self.user}@{self.host} timed out",
                 retry_hint=(
                     f"Check network connectivity to {self.host}:{self.port} "
                     "and that sshd is accepting connections, then retry."
                 ),
-            )
+            ) from e
 
     def _detect_remote_home(self) -> str:
         """Detect the remote user's home directory."""
@@ -329,7 +329,7 @@ class SSHEnvironment(BaseEnvironment):
                         f"Bulk file sync to {self.host} timed out — check the "
                         "connection and retry."
                     ),
-                )
+                ) from e
 
             if tar_proc.returncode != 0:
                 raise RuntimeError(

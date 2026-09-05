@@ -25,7 +25,7 @@ import hmac
 import logging
 import os
 import urllib.parse
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
@@ -60,6 +60,12 @@ def _get_scoped_secret(name, default=None):
         val = os.getenv(name)
     return val if val is not None else default
 
+
+if TYPE_CHECKING:
+    # aiohttp is an optional dependency (see _aiohttp_available()) — only imported
+    # for real at call sites. This satisfies the forward-ref type annotations below
+    # without making aiohttp a hard import-time dependency of this module.
+    import aiohttp  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

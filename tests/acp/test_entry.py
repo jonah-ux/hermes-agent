@@ -2,10 +2,13 @@
 
 import sys
 
-import acp
 import pytest
 
-from acp_adapter import entry
+pytest.importorskip("acp", reason="agent-client-protocol ('acp' pyproject extra) not installed in this environment")
+
+import acp  # noqa: E402  -- after importorskip
+
+from acp_adapter import entry  # noqa: E402  -- after importorskip
 
 
 def test_main_enables_unstable_protocol(monkeypatch):

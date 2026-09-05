@@ -1752,3 +1752,20 @@ def _moa_caches_isolated():
     yield
     moa._preset_cache.clear()
     moa._runtime_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _managed_runtime_root_sandbox(monkeypatch, tmp_path):
+    """Keep hermes_cli.managed_uv's runtime repair away from the real checkout.
+
+    ``managed_uv._PROJECT_ROOT`` is computed once at import time from
+    ``__file__`` and is NOT the ``PROJECT_ROOT`` symbol tests routinely
+    monkeypatch on ``hermes_main``/``update_cmd``. Any test that reaches
+    ``ensure_uv()`` -> ``_run_runtime_repair()`` without stubbing it calls
+    ``repair_vulnerable_runtime(uv_bin)`` with no ``project_root`` and falls
+    back to that constant -- on 2026-09-05 that rewrote this checkout's
+    ``.venv/bin/python`` mid-suite. Tests that pass ``project_root=`` explicitly
+    are unaffected.
+    """
+    managed_uv = pytest.importorskip("hermes_cli.managed_uv")
+    monkeypatch.setattr(managed_uv, "_PROJECT_ROOT", tmp_path / "managed-runtime-root")

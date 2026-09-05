@@ -16,7 +16,9 @@ from io import StringIO
 
 import pytest
 
-from acp.exceptions import RequestError
+pytest.importorskip("acp", reason="agent-client-protocol ('acp' pyproject extra) not installed in this environment")
+
+from acp.exceptions import RequestError  # noqa: E402  -- after importorskip
 
 from acp_adapter.entry import _BenignProbeMethodFilter
 

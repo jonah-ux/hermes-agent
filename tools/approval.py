@@ -2495,9 +2495,19 @@ def _is_verification_artifact_cleanup(command: str) -> bool:
         return False
 
     operand = argv[2]
-    temp_dir = os.path.realpath(tempfile.gettempdir())
+    raw_temp_dir = tempfile.gettempdir()
+    temp_dir = os.path.realpath(raw_temp_dir)
     basename = os.path.basename(operand)
-    if operand != os.path.join(temp_dir, basename):
+    operand_dir = os.path.dirname(operand)
+    # macOS's tempfile.gettempdir() returns "/tmp", a symlink to "/private/tmp" --
+    # legitimate cleanup commands in this codebase are built from that raw value,
+    # so accept it too. Scoped to that one well-known OS-level alias only -- an
+    # arbitrary caller-supplied symlinked directory must still match the
+    # *resolved* form.
+    dir_matches = operand_dir == temp_dir or (
+        sys.platform == "darwin" and raw_temp_dir == "/tmp" and operand_dir == raw_temp_dir
+    )
+    if not dir_matches:
         return False
 
     target = os.path.realpath(operand)

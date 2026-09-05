@@ -1,7 +1,10 @@
 import base64
 
 import pytest
-from acp.schema import (
+
+pytest.importorskip("acp", reason="agent-client-protocol ('acp' pyproject extra) not installed in this environment")
+
+from acp.schema import (  # noqa: E402  -- after importorskip
     BlobResourceContents,
     EmbeddedResourceContentBlock,
     ImageContentBlock,

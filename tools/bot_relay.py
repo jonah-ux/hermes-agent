@@ -663,10 +663,10 @@ def acquire_turn_lock(
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
-            except OSError:
+            except OSError as e:
                 now = time.monotonic()
                 if now >= deadline:
-                    raise TurnBusyError(profile, now - start)
+                    raise TurnBusyError(profile, now - start) from e
                 time.sleep(min(0.1, max(0.005, deadline - now)))
         try:
             yield path

@@ -60,7 +60,7 @@ def _ensure_vercel_sdk() -> None:
     except ImportError:
         pass
     except Exception as e:
-        raise ImportError(str(e))
+        raise ImportError(str(e)) from e
 
 
 _CREATE_RETRY_ATTEMPTS = 3

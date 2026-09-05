@@ -1272,7 +1272,7 @@ def get_honcho_client(config: HonchoClientConfig | None = None) -> Honcho:
                 "honcho-ai is required for Honcho integration. "
                 "Install it with: pip install honcho-ai  "
                 "(or run `hermes honcho setup` to configure)."
-            )
+            ) from None
 
         # Allow config.yaml honcho.base_url to override the SDK's environment
         # mapping, enabling remote self-hosted Honcho deployments without

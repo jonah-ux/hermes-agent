@@ -170,6 +170,7 @@ class TestResolveAutoCustomEndToEnd:
         trailing ``/anthropic`` into ``/v1`` and 404s against proxies like
         Palantir Foundry's Anthropic surface.  The resulting client must be an
         AnthropicAuxiliaryClient pointed at the ORIGINAL /anthropic URL."""
+        pytest.importorskip("anthropic")  # skip if optional SDK missing
         import agent.auxiliary_client as mod
 
         for var in ("OPENROUTER_API_KEY", "NOUS_API_KEY", "OPENAI_API_KEY",

@@ -17,6 +17,25 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
 
+def _parallel_web_installed() -> bool:
+    """True when the optional ``parallel-web`` distribution is actually pip-installed.
+
+    ``tools.lazy_deps.ensure()`` intentionally gates on real installed-distribution
+    metadata (``importlib.metadata.version``), not on ``sys.modules`` presence, so it can
+    enforce version pins across ``hermes update``. That means a test-injected
+    ``sys.modules["parallel"]`` fake module (see ``TestParallelClientConfig.setup_method``)
+    cannot satisfy the lazy-install gate when the real ``parallel-web`` package is absent —
+    this is environment-only, not a code defect.
+    """
+    try:
+        import importlib.metadata
+
+        importlib.metadata.version("parallel-web")
+        return True
+    except importlib.metadata.PackageNotFoundError:
+        return False
+
+
 class TestFirecrawlClientConfig:
     """Test suite for Firecrawl client initialization."""
 
@@ -409,6 +428,17 @@ class TestParallelClientConfig:
         os.environ.pop("PARALLEL_API_KEY", None)
         sys.modules.pop("parallel", None)
 
+    @pytest.mark.skipif(
+        not _parallel_web_installed(),
+        reason=(
+            "ENV-ONLY: requires the optional 'parallel-web==0.4.2' package to be pip-installed. "
+            "tools.lazy_deps.ensure() gates on real installed-distribution metadata (for "
+            "hermes-update version-pin enforcement), not on sys.modules, so this test's fake "
+            "sys.modules['parallel'] injection can't satisfy the check when parallel-web is "
+            "absent — consistent with the global HERMES_DISABLE_LAZY_INSTALLS=1 test-isolation "
+            "fixture in tests/conftest.py."
+        ),
+    )
     def test_creates_client_with_key(self):
         """PARALLEL_API_KEY set → creates Parallel client."""
         with patch.dict(os.environ, {"PARALLEL_API_KEY": "test-key"}):
@@ -424,6 +454,17 @@ class TestParallelClientConfig:
         with pytest.raises(ValueError, match="PARALLEL_API_KEY"):
             _get_parallel_client()
 
+    @pytest.mark.skipif(
+        not _parallel_web_installed(),
+        reason=(
+            "ENV-ONLY: requires the optional 'parallel-web==0.4.2' package to be pip-installed. "
+            "tools.lazy_deps.ensure() gates on real installed-distribution metadata (for "
+            "hermes-update version-pin enforcement), not on sys.modules, so this test's fake "
+            "sys.modules['parallel'] injection can't satisfy the check when parallel-web is "
+            "absent — consistent with the global HERMES_DISABLE_LAZY_INSTALLS=1 test-isolation "
+            "fixture in tests/conftest.py."
+        ),
+    )
     def test_singleton_returns_same_instance(self):
         """Second call returns cached client."""
         with patch.dict(os.environ, {"PARALLEL_API_KEY": "test-key"}):

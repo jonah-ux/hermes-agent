@@ -14,6 +14,7 @@ import concurrent.futures
 import contextlib
 import contextvars
 import errno
+import inspect
 import json
 import logging
 import os
@@ -4049,15 +4050,29 @@ def _deliver_result(
                         # (#100489) — same pattern as the session-db and
                         # heartbeat workers in this module.
                         _fallback_context = contextvars.copy_context()
+                        # Built eagerly (as a `pool.submit(...)` argument) before the
+                        # pool worker thread ever runs it. If `submit()` itself raises
+                        # synchronously (e.g. "cannot schedule new futures after
+                        # shutdown" during an interpreter-shutdown race), the worker
+                        # never starts draining the coroutine and it is otherwise
+                        # dropped un-awaited, surfacing later as "RuntimeWarning:
+                        # coroutine '_send_to_platform' was never awaited".
+                        fallback_coro = _send_to_platform(platform, pconfig, chat_id, cleaned_delivery_content, thread_id=thread_id, media_files=media_files)
                         future = pool.submit(
                             _fallback_context.run,
                             asyncio.run,
-                            _send_to_platform(platform, pconfig, chat_id, cleaned_delivery_content, thread_id=thread_id, media_files=media_files),
+                            fallback_coro,
                         )
                         result = future.result(timeout=30)
                     finally:
                         pool.shutdown(wait=False)
                 except Exception as e:
+                    # Only close if the pool worker never started iterating it (still
+                    # CORO_CREATED) — closing a coroutine that a *different* thread may
+                    # already be mid-flight on is not thread-safe and could corrupt
+                    # that thread's execution.
+                    if inspect.getcoroutinestate(fallback_coro) == inspect.CORO_CREATED:
+                        fallback_coro.close()
                     # A shutdown-race here is expected during teardown; downgrade
                     # to a warning so it doesn't read as a genuine failure.
                     if _interpreter_shutting_down(e):

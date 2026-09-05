@@ -186,6 +186,7 @@ class TestClientShape:
         """Portal validates the OAuth invoke JWT as a Bearer credential, the
         same way its /chat/completions route does. Sending it as x-api-key
         (the adapter's third-party default) 401s."""
+        pytest.importorskip("anthropic")  # skip if optional SDK missing
         from agent.anthropic_adapter import build_anthropic_client
 
         client = build_anthropic_client("portal-invoke-jwt", PORTAL_URL)
@@ -200,6 +201,7 @@ class TestClientShape:
         constructor omits it. Hermes loads that env from ~/.hermes/.env, so
         without an explicit clear every Portal request would dual-auth as
         X-Api-Key: sk-ant-… + Authorization: Bearer portal.jwt."""
+        pytest.importorskip("anthropic")  # skip if optional SDK missing
         from agent.anthropic_adapter import build_anthropic_client
 
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-leak")

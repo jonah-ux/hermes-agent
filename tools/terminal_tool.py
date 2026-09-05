@@ -1613,11 +1613,11 @@ def _parse_env_var(name: str, default: str, converter: Any = int, type_label: st
         raw = _tenv(name, default)
     try:
         return converter(raw)
-    except (ValueError, json.JSONDecodeError):
+    except (ValueError, json.JSONDecodeError) as e:
         raise ValueError(
             f"Invalid value for {name}: {raw!r} (expected {type_label}). "
             f"Check ~/.hermes/.env or environment variables."
-        )
+        ) from e
 
 
 def _safe_getcwd() -> str:

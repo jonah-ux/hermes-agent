@@ -578,7 +578,7 @@ class _SlashWorker:
                 try:
                     msg = self.stdout_queue.get(timeout=_SLASH_WORKER_TIMEOUT_S)
                 except queue.Empty:
-                    raise RuntimeError("slash worker timed out")
+                    raise RuntimeError("slash worker timed out") from None
                 if msg is None:
                     break
                 if msg.get("id") != rid:

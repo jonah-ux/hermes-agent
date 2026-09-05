@@ -190,6 +190,7 @@ model:
 
     def test_vision_capable_main_used(self, isolated_home, monkeypatch):
         """Vision-capable main provider should be returned by auto chain."""
+        pytest.importorskip("anthropic")  # skip if optional SDK missing
         _write_config(isolated_home, """
 model:
   provider: anthropic

@@ -47,6 +47,11 @@ class TestWecomCrypto:
 
 class TestWecomCallbackEventConstruction:
     def test_build_event_extracts_text_message(self):
+        # _build_event() parses XML via the optional [wecom] extra
+        # (defusedxml==0.7.1, pyproject.toml ~L209); when it is not
+        # installed, callback_adapter.py sets ET = None and this test
+        # environment cannot exercise the parse path.
+        pytest.importorskip("defusedxml", reason="wecom XML parsing needs the [wecom] extra (defusedxml)")
         adapter = WecomCallbackAdapter(_config())
         xml_text = """
         <xml>
@@ -142,6 +147,10 @@ class TestWecomCallbackSendTokenRefresh:
 class TestWecomCallbackPollLoop:
     @pytest.mark.asyncio
     async def test_poll_loop_dispatches_handle_message(self, monkeypatch):
+        # Same optional-dependency gap as test_build_event_extracts_text_message
+        # above: the poll loop's dispatch path calls _build_event(), which
+        # needs the [wecom] extra (defusedxml) to parse the callback XML.
+        pytest.importorskip("defusedxml", reason="wecom XML parsing needs the [wecom] extra (defusedxml)")
         adapter = WecomCallbackAdapter(_config())
         calls = []
 

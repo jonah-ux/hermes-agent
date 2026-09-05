@@ -177,7 +177,7 @@ def _install_fake_openai_module(captured, transcription_response=None):
 def test_managed_fal_submit_uses_gateway_origin_and_nous_token(monkeypatch):
     captured = {}
     _install_fake_tools_package()
-    _install_fake_fal_client(captured)
+    fal_client_module = _install_fake_fal_client(captured)
     monkeypatch.delenv("FAL_KEY", raising=False)
     monkeypatch.setenv("FAL_QUEUE_GATEWAY_URL", "http://127.0.0.1:3009")
     monkeypatch.setenv("TOOL_GATEWAY_USER_TOKEN", "nous-token")
@@ -186,6 +186,16 @@ def test_managed_fal_submit_uses_gateway_origin_and_nous_token(monkeypatch):
         "tools.image_generation_tool",
         "image_generation_tool.py",
     )
+    # The sys.modules["fal_client"] stub above satisfies a plain ``import fal_client``, but
+    # _load_fal_client() actually calls tools.fal_common.import_fal_client(), which first runs
+    # it past tools.lazy_deps.ensure("image.fal") — a metadata/version check (is fal-client
+    # actually pip-installed?) that a sys.modules stub can never satisfy. In this dev venv
+    # fal-client isn't installed, so that gate raises FeatureUnavailable/ImportError before the
+    # stub is ever consulted. image_generation_tool's own module docstring documents the correct
+    # test seam: its ``fal_client`` global is checked for truthiness first
+    # (_load_fal_client(): ``if fal_client is None: ...``), so monkeypatching that global directly
+    # short-circuits the lazy-install gate entirely, matching the module's documented convention.
+    monkeypatch.setattr(image_generation_tool, "fal_client", fal_client_module)
     monkeypatch.setattr(image_generation_tool.uuid, "uuid4", lambda: "fal-submit-123")
     
     image_generation_tool._submit_fal_request(

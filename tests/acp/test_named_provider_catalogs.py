@@ -12,9 +12,11 @@ from unittest.mock import patch
 
 import pytest
 
-from acp_adapter.server import HermesACPAgent, _named_custom_provider_catalogs
-from acp_adapter.session import SessionManager
-from acp.schema import SessionModelState
+pytest.importorskip("acp", reason="agent-client-protocol ('acp' pyproject extra) not installed in this environment")
+
+from acp_adapter.server import HermesACPAgent, _named_custom_provider_catalogs  # noqa: E402  -- after importorskip
+from acp_adapter.session import SessionManager  # noqa: E402  -- after importorskip
+from acp.schema import SessionModelState  # noqa: E402  -- after importorskip
 
 
 MANTLE_URL = "https://bedrock-mantle.us-east-1.api.aws/openai/v1"

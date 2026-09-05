@@ -78,3 +78,42 @@ def test_many_concurrent_lock_acquisitions_do_not_raise_permission_error(hermes_
     assert not still_alive, f"{len(still_alive)}/{CONCURRENCY} threads never finished"
     assert not errors, f"unexpected exceptions acquiring the lock concurrently: {errors!r}"
     assert entered == CONCURRENCY
+
+
+def test_lock_timeout_chains_underlying_os_error(hermes_home):
+    """``_file_lock``'s ``TimeoutError`` must chain the real OS error that caused it.
+
+    The retry loop swallows ``BlockingIOError``/``OSError``/``PermissionError`` on every
+    failed attempt and only raises once the deadline passes. Before this fix it raised a
+    bare ``TimeoutError(timeout_message)`` with no ``__cause__``, discarding the actual
+    OS-level reason (errno, which syscall) every single time the lock is contended --
+    the one piece of information an operator needs to tell "another Hermes process is
+    slow" apart from "the lock file itself is unusable" (bad permissions, stale NFS
+    handle, etc). Assert the chain survives so the diagnostic isn't silently dropped.
+    """
+    holder_ready = threading.Event()
+    release_holder = threading.Event()
+
+    def _hold_lock() -> None:
+        with _auth_store_lock(timeout_seconds=10.0):
+            holder_ready.set()
+            release_holder.wait(timeout=10)
+
+    holder_thread = threading.Thread(target=_hold_lock)
+    holder_thread.start()
+    try:
+        assert holder_ready.wait(timeout=10), "holder thread never acquired the lock"
+
+        with pytest.raises(TimeoutError) as excinfo:
+            with _auth_store_lock(timeout_seconds=0.3):
+                pass  # pragma: no cover - must time out before entering
+
+        assert excinfo.value.__cause__ is not None, (
+            "TimeoutError lost its __cause__ -- the underlying OS lock error "
+            "must be chained with `from`, not swallowed"
+        )
+        assert isinstance(excinfo.value.__cause__, (BlockingIOError, OSError, PermissionError))
+    finally:
+        release_holder.set()
+        holder_thread.join(timeout=10)
+        assert not holder_thread.is_alive(), "holder thread never released the lock"

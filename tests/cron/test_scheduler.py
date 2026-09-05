@@ -866,6 +866,17 @@ class TestRunJobSessionPersistence:
             def result(self):
                 return {"final_response": "ok"}
 
+            def done(self):
+                # cron/scheduler.py's background inactivity-watchdog thread
+                # polls a real concurrent.futures.Future via `.done` (see
+                # `_watch_inactivity` -> `_inactivity_watchdog_loop`,
+                # independent of the main thread's `concurrent.futures.wait`
+                # call). Without this the watchdog thread raises
+                # AttributeError on every poll tick, surfaced only as an
+                # unraisable PytestUnhandledThreadExceptionWarning since it
+                # runs on a daemon thread the test never joins.
+                return True
+
         fake_future = FakeFuture()
         fake_pool = MagicMock()
         fake_pool.submit.return_value = fake_future
@@ -2762,6 +2773,94 @@ class TestMultiTargetDeliveryContinuesOnFailure:
         assert "a@example.com" in result
         assert "b@example.com" in result
         assert mock_pool.submit.call_count == 2
+
+class TestStandaloneSendFallbackCoroNotLeaked:
+    """Regression: when the ThreadPoolExecutor fallback in `_standalone_send` raises
+    SYNCHRONOUSLY out of `pool.submit(...)` itself (before any worker thread ever runs the
+    submitted coroutine — e.g. "cannot schedule new futures after shutdown" during an
+    interpreter-shutdown race), the eagerly-constructed fallback coroutine must be closed,
+    not silently dropped un-awaited (cron/scheduler_delivery.py `_standalone_send`).
+
+    Before the fix, `fallback_coro = _send()` was passed directly as a `pool.submit(...)`
+    argument with no reference retained; a synchronous `submit()` failure escaped straight to
+    the `except Exception as e:` handler with no way to close it, and CPython's GC later
+    raised "RuntimeWarning: coroutine '_send_to_platform' was never awaited" out of an
+    unrelated later test (via `_pytest.unraisableexception`), because collection timing —
+    not creation — decides which test the warning is attributed to.
+    """
+
+    def _email_cfg(self):
+        from gateway.config import Platform
+
+        pconfig = MagicMock()
+        pconfig.enabled = True
+        mock_cfg = MagicMock()
+        mock_cfg.platforms = {Platform.EMAIL: pconfig}
+        return mock_cfg
+
+    def test_submit_raising_synchronously_closes_fallback_coro_without_warning(self):
+        """`pool.submit()` itself raises (not `.result()`) — the fallback coroutine it was
+        constructed to carry must be closed, not dropped un-awaited.
+
+        This asserts DIRECTLY on the coroutine's state (`inspect.getcoroutinestate(...)` /
+        `cr_frame is None` after `.close()`) rather than relying on CPython's
+        deallocation-time "never awaited" `RuntimeWarning`. That warning fires only from
+        `coro_dealloc` (Objects/genobject.c) at the moment the coroutine object is actually
+        garbage-collected — and in this exact mocked scenario the coroutine is NOT
+        collectible at all, closed or not: `mock_pool.submit`'s `side_effect=RuntimeError(...)`
+        raises through `unittest.mock`'s call machinery, and the traceback attached to that
+        exception (retained by `_standalone_send`'s own `except Exception as e:` handler,
+        which logs it via `logger.error(..., exc_info=True)`) keeps a live reference chain
+        back to the `_standalone_send` frame — and therefore to `fallback_coro` — for as
+        long as anything holds that traceback/log record. Verified empirically (2026-09-04):
+        with `weakref.ref(fallback_coro)` held across `gc.collect()`, the coroutine survives
+        collection in BOTH the fixed and the deliberately-reintroduced-buggy state of
+        `_standalone_send` — so a warnings-based assertion here would pass unconditionally
+        and prove nothing. The direct state check below does not have that blind spot: it
+        distinguishes "closed" (`cr_frame is None`) from "never closed" (`cr_frame` still
+        set / state still `CORO_CREATED`) regardless of whether GC ever reclaims the object.
+        """
+        import inspect
+
+        job = {
+            "id": "submit-raises-job",
+            "deliver": "email:a@example.com",
+        }
+
+        with patch("gateway.config.load_gateway_config", return_value=self._email_cfg()), \
+             patch("cron.scheduler.load_config", return_value={"cron": {"wrap_response": False}}), \
+             patch("asyncio.run", side_effect=RuntimeError("no running loop")), \
+             patch("concurrent.futures.ThreadPoolExecutor") as mock_pool_cls:
+            mock_pool = MagicMock()
+            mock_pool_cls.return_value = mock_pool
+            # submit() itself raises synchronously — the pool never schedules the coroutine
+            # on any worker thread. Deliberately NOT the "cannot schedule new futures..."
+            # message (that phrase is treated as an interpreter-shutdown signal and takes a
+            # different, already-safe branch) — this exercises the general
+            # `except Exception as e:` path's own fallback_coro-close fix.
+            mock_pool.submit.side_effect = RuntimeError("pool rejected the submitted work")
+
+            result = _deliver_result(job, "Report content")
+
+            # The fallback coroutine is the 3rd positional arg to
+            # `pool.submit(contextvars.copy_context().run, asyncio.run, fallback_coro)`.
+            assert mock_pool.submit.call_args is not None, "pool.submit() was never called"
+            fallback_coro = mock_pool.submit.call_args[0][2]
+            assert inspect.iscoroutine(fallback_coro), (
+                f"expected the 3rd submit() arg to be the fallback coroutine, got "
+                f"{fallback_coro!r}"
+            )
+            assert fallback_coro.cr_frame is None, (
+                "fallback coroutine was left open (cr_frame is not None) after a synchronous "
+                "pool.submit() failure — it must be .close()d, not dropped un-awaited"
+            )
+            assert (
+                inspect.getcoroutinestate(fallback_coro) == inspect.CORO_CLOSED
+            ), f"expected CORO_CLOSED, got {inspect.getcoroutinestate(fallback_coro)}"
+
+        assert result is not None
+        assert "a@example.com" in result
+
 
 class TestBuildJobPromptExtraPrompt:
     """Regression: _build_job_prompt merges extra_prompt into the assembled prompt."""

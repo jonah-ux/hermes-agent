@@ -2,7 +2,10 @@ import sys
 from types import ModuleType, SimpleNamespace
 
 import pytest
-from acp.schema import TextContentBlock
+
+pytest.importorskip("acp", reason="agent-client-protocol ('acp' pyproject extra) not installed in this environment")
+
+from acp.schema import TextContentBlock  # noqa: E402  -- after importorskip
 
 from acp_adapter.server import HermesACPAgent
 from acp_adapter.session import SessionManager

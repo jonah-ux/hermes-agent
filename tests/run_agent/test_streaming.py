@@ -875,6 +875,7 @@ class TestAnthropicStreamCallbacks:
         Anthropic client, NOT the OpenAI primary client (which would fail with
         Missing-credentials and leave the wedged stream open). See #28161.
         """
+        pytest.importorskip("anthropic")  # skip if optional SDK missing
         from run_agent import AIAgent
 
         agent = AIAgent(
@@ -932,6 +933,7 @@ class TestAnthropicStreamCallbacks:
         self, mock_replace, monkeypatch,
     ):
         """Only known provider stream parser ValueErrors are treated as transient."""
+        pytest.importorskip("anthropic")  # skip if optional SDK missing
         from run_agent import AIAgent
 
         agent = AIAgent(
@@ -971,6 +973,7 @@ class TestAnthropicStreamCallbacks:
         That must be normalized to EmptyStreamError and retried as
         transient — not surface as a raw AssertionError."""
         from agent.errors import EmptyStreamError
+        pytest.importorskip("anthropic")  # skip if optional SDK missing
         from run_agent import AIAgent
 
         agent = AIAgent(

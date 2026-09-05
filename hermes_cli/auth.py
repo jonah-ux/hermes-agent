@@ -1313,9 +1313,9 @@ def _file_lock(
                     lock_file.seek(0)
                     msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
                 break
-            except (BlockingIOError, OSError, PermissionError):
+            except (BlockingIOError, OSError, PermissionError) as lock_exc:
                 if time.monotonic() >= deadline:
-                    raise TimeoutError(timeout_message)
+                    raise TimeoutError(timeout_message) from lock_exc
                 time.sleep(0.05)
 
         holder.depth = 1
@@ -4065,7 +4065,7 @@ def _spotify_interactive_setup(redirect_uri_hint: str) -> str:
         raw = line_input("Spotify Client ID: ").strip()
     except (EOFError, KeyboardInterrupt):
         print()
-        raise SystemExit("Spotify setup cancelled.")
+        raise SystemExit("Spotify setup cancelled.") from None
 
     if not raw:
         print()
@@ -9116,7 +9116,7 @@ def _codex_device_code_login() -> Dict[str, Any]:
                     )
     except KeyboardInterrupt:
         print("\nLogin cancelled.")
-        raise SystemExit(130)
+        raise SystemExit(130) from None
 
     if code_resp is None:
         raise AuthError(
@@ -9709,7 +9709,7 @@ def _login_minimax_oauth(args, pconfig: ProviderConfig) -> None:
         )
     except AuthError as exc:
         print(format_auth_error(exc))
-        raise SystemExit(1)
+        raise SystemExit(1) from None
 
 
 def _nous_device_code_login(
@@ -9848,7 +9848,7 @@ def _nous_device_code_login(
             print(f"  Subscribe here: {portal_url}/billing")
             print()
             print("After subscribing, run `hermes model` again to finish setup.")
-            raise SystemExit(1)
+            raise SystemExit(1) from None
         raise
 
 
@@ -10155,10 +10155,10 @@ def _login_nous(args, pconfig: ProviderConfig) -> None:
 
     except KeyboardInterrupt:
         print("\nLogin cancelled.")
-        raise SystemExit(130)
+        raise SystemExit(130) from None
     except Exception as exc:
         print(f"Login failed: {exc}")
-        raise SystemExit(1)
+        raise SystemExit(1) from exc
 
 
 def logout_command(args) -> None:

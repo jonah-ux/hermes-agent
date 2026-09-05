@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -18634,6 +18635,44 @@ def test_slash_worker_close_reaps_zombie_and_closes_fds():
     assert calls["kill"] == 1
     assert calls["wait"] >= 2  # reaped after both terminate and kill
     assert calls["stdin"] == calls["stdout"] == calls["stderr"] == 1
+
+
+def test_slash_worker_run_timeout_does_not_chain_queue_empty():
+    """The timed-out RuntimeError must suppress the uninformative queue.Empty
+    context (``from None``), not chain it -- ``queue.Empty`` carries no
+    diagnostic payload, so chaining it just adds traceback noise. Regression
+    for a B904 fix at the ``except queue.Empty:`` clause in ``_SlashWorker.run``.
+    """
+
+    class FakeStdin:
+        def write(self, _data):
+            pass
+
+        def flush(self):
+            pass
+
+    class FakeProc:
+        stdin = FakeStdin()
+
+        def poll(self):
+            return None  # still alive
+
+    class ExplodingQueue:
+        def get(self, timeout=None):
+            raise queue.Empty
+
+    worker = object.__new__(server._SlashWorker)
+    worker.proc = FakeProc()
+    worker._lock = threading.Lock()
+    worker._seq = 0
+    worker.stdout_queue = ExplodingQueue()
+    worker.stderr_tail = []
+
+    with pytest.raises(RuntimeError, match="slash worker timed out") as exc_info:
+        worker.run("echo hi")
+
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__suppress_context__ is True
 
 
 def test_close_session_by_id_is_idempotent_and_full(monkeypatch):

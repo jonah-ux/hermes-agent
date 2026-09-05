@@ -14,11 +14,13 @@ sqlite_master surgery path recovers the canonical data and self-heals on open.
 """
 import contextlib
 import json
+import shutil
 import sqlite3
 import subprocess
 import sys
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,6 +30,23 @@ from hermes_state import (
     is_malformed_db_error,
     repair_state_db_schema,
 )
+
+
+@pytest.fixture(autouse=True)
+def _roomy_disk(monkeypatch):
+    """Pin free-space to ample headroom for every test in this module.
+
+    ``repair_state_db_schema`` refuses to back up or repair when
+    ``shutil.disk_usage`` (hermes_state_repair.py) reports less than ~2% of
+    the *total* volume free. On any machine where the real disk this test
+    suite runs on is tight, that guard silently turns "repair succeeded"
+    assertions into "repair was refused" failures that have nothing to do
+    with the corruption-recovery logic under test here. See
+    test_state_db_repair_loop_mtime.py for the tests that deliberately
+    simulate a full disk.
+    """
+    roomy = SimpleNamespace(total=500_000_000_000, used=0, free=400_000_000_000)
+    monkeypatch.setattr(shutil, "disk_usage", lambda *_a, **_kw: roomy)
 
 
 def _build_healthy_db(db_path: Path) -> str:
@@ -501,8 +520,11 @@ def test_repair_reports_success_when_the_holder_already_healed_the_db(
 
 
 _REPAIR_SCRIPT = """
-import sys, json
+import sys, json, shutil
 sys.path.insert(0, {root!r})
+shutil.disk_usage = lambda *_a, **_kw: type(
+    "Usage", (), {{"total": 500_000_000_000, "used": 0, "free": 400_000_000_000}}
+)()
 from hermes_state import repair_state_db_schema
 print(json.dumps(repair_state_db_schema({db!r})), flush=True)
 """

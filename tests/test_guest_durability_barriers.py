@@ -8,6 +8,7 @@ the guest entry point applies it directly.
 """
 
 import sqlite3
+import sys
 
 import pytest
 
@@ -47,7 +48,13 @@ def test_guest_barriers_leave_synchronous_alone_when_unset(monkeypatch, tmp_path
         conn.execute("PRAGMA journal_mode=DELETE")
         conn.execute("PRAGMA synchronous=1")
         apply_durability_barriers(conn)
-        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1
+        # With database.synchronous unset the guest path must not apply a
+        # configured level -- but the platform write barrier still runs first:
+        # on Darwin _enforce_macos_synchronous_full deliberately raises the
+        # level to FULL (half-written b-tree pages on an interrupted rewrite),
+        # so "leave alone" means "no config-driven change", not "no barrier".
+        expected = 2 if sys.platform == "darwin" else 1
+        assert conn.execute("PRAGMA synchronous").fetchone()[0] == expected
     finally:
         conn.close()
 

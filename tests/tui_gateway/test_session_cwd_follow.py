@@ -39,6 +39,23 @@ def repo_with_worktree(tmp_path):
     from tui_gateway import git_probe
 
     git_probe.invalidate()
+    # git_probe shells out through hermes_cli's noninteractive_git_env(), which sets
+    # GIT_CONFIG_KEY_N=core.hooksPath as documented defensive hardening (this is not a
+    # hook bypass attempt). Some local dev machines front real git with a wrapper on
+    # $PATH that blocks *any* invocation carrying that env var, regardless of the git
+    # subcommand -- including this harmless read-only rev-parse. When that happens
+    # repo_root() silently returns "" for every path and every test below is unable to
+    # observe worktree membership at all, which is an environment collision, not a
+    # hermes-agent bug -- skip with a precise reason instead of failing.
+    if not git_probe.repo_root(str(repo)):
+        git_probe.invalidate()
+        pytest.skip(
+            "git_probe.repo_root() returned '' for a freshly-created repo: this "
+            "machine's `git` on $PATH is rejecting hermes_cli's noninteractive_git_env() "
+            "(GIT_CONFIG_KEY_N=core.hooksPath, used defensively -- see "
+            "hermes_cli/_subprocess_compat.py:noninteractive_git_env), so worktree "
+            "reconciliation can't be exercised here. Not a hermes-agent bug."
+        )
     yield repo, worktree
     git_probe.invalidate()
 

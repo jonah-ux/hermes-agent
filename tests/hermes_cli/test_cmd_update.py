@@ -76,7 +76,7 @@ def _patch_managed_uv(request):
 
 
 @pytest.fixture(autouse=True)
-def _patch_gateway_discovery():
+def _patch_gateway_discovery(tmp_path):
     """Keep cmd_update's gateway auto-restart phase off this machine's gateways.
 
     The restart phase used to swallow every exception at debug level, so these
@@ -86,10 +86,43 @@ def _patch_gateway_discovery():
     conftest live-system guard and turns into a spurious ``sys.exit(1)``.
     Discovery returning nothing makes the phase a clean no-op for every test
     in this module (none of them assert on gateway restarts).
+
+    ``_restart_launchd_gateway_after_update`` (#74973/#88848) is a separate
+    launchd-specific path that never calls any of the three functions above —
+    it calls ``get_launchd_plist_path()`` directly against the real
+    filesystem. On a dev box with an actual installed Hermes gateway (e.g.
+    ``~/Library/LaunchAgents/ai.hermes.gateway.plist``) that path exists, so
+    the "not a launchd install" early-return never fires: the tests instead
+    fall through to a real ``launchd_restart()`` call and a real (mocked
+    subprocess but real wall-clock, up to ``LAUNCHD_SUPERVISION_VERIFY_TIMEOUT``
+    = 20s) poll in ``wait_for_launchd_gateway_supervision`` that can never
+    succeed against a mocked ``subprocess.run`` — surfacing as
+    "restarted but launchd is not supervising it" -> ``sys.exit(1)`` in every
+    test in this module that reaches the gateway-restart phase. Point it at a
+    path that provably does not exist so the launchd branch also no-ops.
+
+    That patch alone is not enough for any test whose flow reaches
+    ``_restart_gateway_fleet_after_update``: it unconditionally calls
+    ``_purge_stale_hermes_modules()`` first (update_cmd_fleet.py), which pops
+    ``hermes_cli.gateway`` out of ``sys.modules`` — it is in
+    ``_STALE_PURGE_PREFIXES`` and not in ``_STALE_PURGE_PROTECTED``
+    (update_cmd_maint.py) — before the restart helpers do their own
+    ``from hermes_cli.gateway import get_launchd_plist_path``. That re-import
+    binds a brand new, unpatched module object, silently orphaning the patch
+    above: ``get_launchd_plist_path`` is never actually called through our
+    mock, the real function runs against the real filesystem, and on a dev
+    box with a real installed gateway plist it resolves True again. Purging
+    is a production-only concern (reloading modules after a real git pull
+    rewrote files on disk) that has nothing to test here, so no-op it too.
     """
     with patch("hermes_cli.gateway.find_gateway_pids", return_value=[]), \
          patch("hermes_cli.gateway.supports_systemd_services", return_value=False), \
-         patch("hermes_cli.gateway.find_profile_gateway_processes", return_value=[]):
+         patch("hermes_cli.gateway.find_profile_gateway_processes", return_value=[]), \
+         patch("hermes_cli.main._purge_stale_hermes_modules", return_value=None), \
+         patch(
+             "hermes_cli.gateway.get_launchd_plist_path",
+             return_value=tmp_path / "no-such-launchd-gateway.plist",
+         ):
         yield
 
 

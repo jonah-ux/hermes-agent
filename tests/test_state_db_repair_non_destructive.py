@@ -71,6 +71,27 @@ from hermes_state import repair_state_db_schema
 PAGE_SIZE = 4096
 
 
+@pytest.fixture(autouse=True)
+def _roomy_disk(monkeypatch):
+    """Pin free-space to ample headroom by default.
+
+    These tests exercise repair/promotion *logic*, not the disk-space guard
+    itself (that guard has its own dedicated tests below and in
+    test_state_db_repair_loop_mtime.py). Without this, ``shutil.disk_usage``
+    hits the real filesystem the test runs on, and ``_backup_free_space_error``
+    / ``_repair_scratch_space_error`` (hermes_state_repair.py) refuse the
+    backup/repair on any machine with less than ~2% of its *total* volume
+    size free — which silently turns "repair succeeded" assertions into
+    "repair was refused" failures whenever the CI/dev disk is tight, with no
+    connection to the behavior under test. Individual tests still override
+    this via their own ``monkeypatch.setattr(shutil, "disk_usage", ...)`` or
+    ``unittest.mock.patch("shutil.disk_usage", ...)`` to test the guard
+    itself.
+    """
+    roomy = SimpleNamespace(total=500_000_000_000, used=0, free=400_000_000_000)
+    monkeypatch.setattr(shutil, "disk_usage", lambda *_a, **_kw: roomy)
+
+
 def _writer_after_stage(
     db_path: str,
     ready: "multiprocessing.synchronize.Event",

@@ -1,7 +1,10 @@
 """Tests for acp_adapter.tools — tool kind mapping and ACP content building."""
 
+import pytest
 
-from acp_adapter.edit_approval import EditProposal
+pytest.importorskip("acp", reason="agent-client-protocol ('acp' pyproject extra) not installed in this environment")
+
+from acp_adapter.edit_approval import EditProposal  # noqa: E402  -- after importorskip
 from acp_adapter.tools import (
     TOOL_KIND_MAP,
     build_tool_complete,

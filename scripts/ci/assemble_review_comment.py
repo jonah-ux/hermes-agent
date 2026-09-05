@@ -303,6 +303,9 @@ def render_comment(
             return f"{body}<sub>waiting for jobs to start…</sub>"
         return f"{body}all good!"
 
+    if not has_blocking and not pending and not waiting:
+        body += "all good!\n\n---\n\n"
+
     sections: list[str] = []
 
     for sev in _BLOCKING_SEVERITIES:
