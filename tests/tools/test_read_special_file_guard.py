@@ -7,7 +7,9 @@ Without it, read_file on a workspace FIFO blocks until the exec timeout.
 
 import json
 import os
+import shutil
 import socket
+import tempfile
 
 import pytest
 
@@ -32,13 +34,21 @@ class TestSpecialFileKind:
         assert "FIFO" in (_special_file_kind(fifo) or "")
 
     def test_socket(self, tmp_path):
-        sock_path = tmp_path / "s.sock"
-        s = socket.socket(socket.AF_UNIX)
+        # AF_UNIX paths are limited to ~104 bytes (sun_path); pytest's
+        # tmp_path is often too deep for that on macOS. Bind in a short
+        # /tmp-rooted dir instead so the test exercises the real guard
+        # rather than skipping on hosts with long tmp roots.
+        short_dir = tempfile.mkdtemp(dir="/tmp")
         try:
-            s.bind(str(sock_path))
-            assert "socket" in (_special_file_kind(sock_path) or "")
+            sock_path = os.path.join(short_dir, "s.sock")
+            s = socket.socket(socket.AF_UNIX)
+            try:
+                s.bind(sock_path)
+                assert "socket" in (_special_file_kind(sock_path) or "")
+            finally:
+                s.close()
         finally:
-            s.close()
+            shutil.rmtree(short_dir, ignore_errors=True)
 
     def test_symlink_to_fifo_followed(self, tmp_path):
         fifo = tmp_path / "p.pipe"

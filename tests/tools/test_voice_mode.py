@@ -1,7 +1,9 @@
 """Tests for tools.voice_mode -- all mocked, no real microphone or API calls."""
 
 import os
+import shutil as _shutil
 import struct
+import tempfile
 import time
 import wave
 from pathlib import Path
@@ -121,37 +123,50 @@ def fake_clock(monkeypatch):
 # ============================================================================
 
 class TestPulseSocketReachable:
+    # AF_UNIX sun_path is capped (~104 bytes on macOS); pytest's tmp_path can
+    # exceed that. Bind under a short /tmp-rooted dir instead of skipping, so
+    # the real guard still runs on hosts with long tmp roots.
     def test_stale_socket_file_not_reachable(self, monkeypatch, tmp_path):
         """A socket file with no listener should not count as reachable."""
         import socket as _socket
-        sock_path = tmp_path / "pulse" / "native"
-        sock_path.parent.mkdir(parents=True)
-        # Create + bind, then close so the path is a stale socket file.
-        s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-        s.bind(str(sock_path))
-        s.close()
-        monkeypatch.delenv("PULSE_SERVER", raising=False)
-        monkeypatch.delenv("PULSE_RUNTIME_PATH", raising=False)
-        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-        from tools.voice_mode import _pulse_socket_reachable
-        assert _pulse_socket_reachable() is False
+        short_dir = tempfile.mkdtemp(dir="/tmp")
+        try:
+            sock_dir = os.path.join(short_dir, "pulse")
+            os.makedirs(sock_dir)
+            sock_path = os.path.join(sock_dir, "native")
+            # Create + bind, then close so the path is a stale socket file.
+            s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            s.bind(sock_path)
+            s.close()
+            monkeypatch.delenv("PULSE_SERVER", raising=False)
+            monkeypatch.delenv("PULSE_RUNTIME_PATH", raising=False)
+            monkeypatch.setenv("XDG_RUNTIME_DIR", short_dir)
+            from tools.voice_mode import _pulse_socket_reachable
+            assert _pulse_socket_reachable() is False
+        finally:
+            _shutil.rmtree(short_dir, ignore_errors=True)
 
     def test_listening_socket_reachable_via_xdg_runtime(self, monkeypatch, tmp_path):
         """A live PulseAudio-style socket under XDG_RUNTIME_DIR is reachable (#35622)."""
         import socket as _socket
-        sock_path = tmp_path / "pulse" / "native"
-        sock_path.parent.mkdir(parents=True)
-        server = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-        server.bind(str(sock_path))
-        server.listen(1)
+        short_dir = tempfile.mkdtemp(dir="/tmp")
         try:
-            monkeypatch.delenv("PULSE_SERVER", raising=False)
-            monkeypatch.delenv("PULSE_RUNTIME_PATH", raising=False)
-            monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-            from tools.voice_mode import _pulse_socket_reachable
-            assert _pulse_socket_reachable() is True
+            sock_dir = os.path.join(short_dir, "pulse")
+            os.makedirs(sock_dir)
+            sock_path = os.path.join(sock_dir, "native")
+            server = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            server.bind(sock_path)
+            server.listen(1)
+            try:
+                monkeypatch.delenv("PULSE_SERVER", raising=False)
+                monkeypatch.delenv("PULSE_RUNTIME_PATH", raising=False)
+                monkeypatch.setenv("XDG_RUNTIME_DIR", short_dir)
+                from tools.voice_mode import _pulse_socket_reachable
+                assert _pulse_socket_reachable() is True
+            finally:
+                server.close()
         finally:
-            server.close()
+            _shutil.rmtree(short_dir, ignore_errors=True)
 
 class TestDetectAudioEnvironment:
     def test_clean_environment_is_available(self, monkeypatch):
@@ -1376,6 +1391,7 @@ class TestDefaultInputSamplerate:
             assert wf.getframerate() == 48000
 
 
+@pytest.mark.linux_only
 class TestWSL2PowerShellFallback:
     """Regression tests for WSL2 PowerShell TTS fallback (issue #17608).
 
