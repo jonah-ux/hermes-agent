@@ -3217,7 +3217,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
         caption (or a single space when none) so it retires without a
         tombstone, then create the attachment message.
         """
-        if not os.path.exists(path):
+        if not await asyncio.to_thread(os.path.exists, path):
             return SendResult(success=False, error=f"file not found: {path}")
 
         filename = override_filename or os.path.basename(path) or "upload.bin"
@@ -3678,11 +3678,15 @@ async def _standalone_send(
                     return {"error": f"Google Chat standalone send: inline SA JSON is invalid: {exc}"}
                 creds = service_account.Credentials.from_service_account_info(info, scopes=_CHAT_SCOPES)
             else:
-                if not os.path.exists(sa_value):
+                if not await asyncio.to_thread(os.path.exists, sa_value):
                     return {"error": f"Google Chat standalone send: SA JSON file not found at {sa_value}"}
+
+                def _read_sa_json(path: str):
+                    with open(path, "r", encoding="utf-8") as fh:
+                        return json.load(fh)
+
                 try:
-                    with open(sa_value, "r", encoding="utf-8") as fh:
-                        info = json.load(fh)
+                    info = await asyncio.to_thread(_read_sa_json, sa_value)
                 except json.JSONDecodeError as exc:
                     return {"error": f"Google Chat standalone send: SA JSON file is invalid: {exc}"}
                 creds = service_account.Credentials.from_service_account_info(info, scopes=_CHAT_SCOPES)

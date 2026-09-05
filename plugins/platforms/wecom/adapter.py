@@ -2235,9 +2235,9 @@ class WeComAdapter(BasePlatformAdapter):
             return data, content_type, resolved_name
 
         if parsed.scheme == "file":
-            local_path = Path(unquote(parsed.path)).expanduser()
+            local_path = await asyncio.to_thread(lambda: Path(unquote(parsed.path)).expanduser())
         else:
-            local_path = Path(source).expanduser()
+            local_path = await asyncio.to_thread(lambda: Path(source).expanduser())
 
         if not local_path.is_absolute():
             local_path = (Path.cwd() / local_path).resolve()
