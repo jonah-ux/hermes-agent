@@ -10,6 +10,7 @@ Uses python-telegram-bot library for:
 import asyncio
 import dataclasses
 import inspect
+import io
 import json
 import logging
 import os
@@ -8001,7 +8002,7 @@ class TelegramAdapter(BasePlatformAdapter):
 
         _transcoded_voice_path: Optional[str] = None
         try:
-            if not os.path.exists(audio_path):
+            if not await asyncio.to_thread(os.path.exists, audio_path):
                 return SendResult(success=False, error=self._missing_media_path_error("Audio", audio_path))
 
             # Telegram sendVoice only accepts Ogg/Opus. When the caller
@@ -8056,7 +8057,8 @@ class TelegramAdapter(BasePlatformAdapter):
             else:
                 _caption_variants.append((None, None))
 
-            with open(audio_path, "rb") as audio_file:
+            _audio_bytes = await asyncio.to_thread(_Path(audio_path).read_bytes)
+            with io.BytesIO(_audio_bytes) as audio_file:
                 ext = os.path.splitext(audio_path)[1].lower()
                 # .ogg / .opus files -> send as voice (round playable bubble)
                 if ext in {".ogg", ".opus"}:
@@ -8236,13 +8238,14 @@ class TelegramAdapter(BasePlatformAdapter):
                     caption = alt_text[:1024] if alt_text else None
                     if image_url.startswith("file://"):
                         local_path = _unquote(image_url[7:])
-                        if not os.path.exists(local_path):
+                        if not await asyncio.to_thread(os.path.exists, local_path):
                             logger.warning(
                                 "[%s] Skipping missing image in media group: %s",
                                 self.name, local_path,
                             )
                             continue
-                        fh = open(local_path, "rb")
+                        _photo_bytes = await asyncio.to_thread(_Path(local_path).read_bytes)
+                        fh = io.BytesIO(_photo_bytes)
                         opened_files.append(fh)
                         media.append(InputMediaPhoto(media=fh, caption=caption))
                     else:
@@ -8317,7 +8320,7 @@ class TelegramAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Not connected")
 
         try:
-            if not os.path.exists(image_path):
+            if not await asyncio.to_thread(os.path.exists, image_path):
                 return SendResult(success=False, error=self._missing_media_path_error("Image", image_path))
 
             _thread = self._metadata_thread_id(metadata)
@@ -8329,7 +8332,8 @@ class TelegramAdapter(BasePlatformAdapter):
                 reply_to_message_id=reply_to_id,
                 reply_to_mode=self._reply_to_mode
             )
-            with open(image_path, "rb") as image_file:
+            _image_bytes = await asyncio.to_thread(_Path(image_path).read_bytes)
+            with io.BytesIO(_image_bytes) as image_file:
                 msg = await self._send_with_dm_topic_reply_anchor_retry(
                     self._bot.send_photo,
                     {
@@ -8412,7 +8416,7 @@ class TelegramAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Not connected")
 
         try:
-            if not os.path.exists(file_path):
+            if not await asyncio.to_thread(os.path.exists, file_path):
                 return SendResult(success=False, error=self._missing_media_path_error("File", file_path))
 
             display_name = file_name or os.path.basename(file_path)
@@ -8426,7 +8430,8 @@ class TelegramAdapter(BasePlatformAdapter):
                 reply_to_mode=self._reply_to_mode
             )
 
-            with open(file_path, "rb") as f:
+            _doc_bytes = await asyncio.to_thread(_Path(file_path).read_bytes)
+            with io.BytesIO(_doc_bytes) as f:
                 msg = await self._send_with_dm_topic_reply_anchor_retry(
                     self._bot.send_document,
                     {
@@ -8466,7 +8471,7 @@ class TelegramAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Not connected")
 
         try:
-            if not os.path.exists(video_path):
+            if not await asyncio.to_thread(os.path.exists, video_path):
                 return SendResult(success=False, error=self._missing_media_path_error("Video", video_path))
 
             _thread = self._metadata_thread_id(metadata)
@@ -8478,7 +8483,8 @@ class TelegramAdapter(BasePlatformAdapter):
                 reply_to_message_id=reply_to_id,
                 reply_to_mode=self._reply_to_mode
             )
-            with open(video_path, "rb") as f:
+            _video_bytes = await asyncio.to_thread(_Path(video_path).read_bytes)
+            with io.BytesIO(_video_bytes) as f:
                 msg = await self._send_with_dm_topic_reply_anchor_retry(
                     self._bot.send_video,
                     {
