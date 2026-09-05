@@ -232,7 +232,14 @@ class TestEmbeddedDaemonOverlayFlag:
         process.poll.return_value = None
         status = MagicMock(returncode=0)
 
+        # Non-macOS platform: the daemon spawns the driver binary directly
+        # (no CuaDriver.app bundle resolution/codesign check, which is a
+        # macOS-only concern covered by dedicated tests). This isolates the
+        # behavior under test (--no-overlay threading) from that unrelated
+        # platform-specific dependency.
         with patch.object(
+            cua_backend.sys, "platform", "linux",
+        ), patch.object(
             cua_backend,
             "_resolve_mcp_invocation",
             return_value=("/usr/bin/cua-driver", ["mcp"]),

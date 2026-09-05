@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from agent.secret_scope import UnscopedSecretError as _UnscopedSecretError
@@ -513,11 +514,10 @@ def resolve_whatsapp_bridge_dir() -> Path:
     Returns the resolved bridge directory path.
     """
     import shutil
-    from pathlib import Path as _Path
 
     # Default location in install tree (may be read-only)
     from hermes_constants import get_hermes_home
-    install_bridge = _Path(__file__).resolve().parents[2] / "scripts" / "whatsapp-bridge"
+    install_bridge = Path(__file__).resolve().parents[2] / "scripts" / "whatsapp-bridge"
 
     # Try HERMES_HOME location first
     hermes_home = get_hermes_home()

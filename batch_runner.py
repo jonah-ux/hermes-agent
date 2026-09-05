@@ -1087,39 +1087,54 @@ class BatchRunner:
         # Find ALL batch files in the output directory (handles resume merging old + new)
         all_batch_files = sorted(self.output_dir.glob("batch_*.jsonl"))
         
-        with open(combined_file, 'w', encoding='utf-8') as outfile:
-            for batch_file in all_batch_files:
-                batch_files_found += 1
-                batch_num = batch_file.stem.split("_")[1]  # Extract batch number for logging
-                
-                with open(batch_file, 'r', encoding='utf-8') as infile:
-                    for line in infile:
-                        total_entries += 1
-                        try:
-                            data = json.loads(line)
+        # Write to a same-dir temp file + atomic_replace so a crash mid-merge can never
+        # truncate/corrupt trajectories.jsonl (or destroy a prior successful run's file
+        # before the new one is confirmed complete).
+        import uuid
 
-                            # Discard tombstones are resume bookkeeping, not
-                            # training data (#93527) — never enter the merged
-                            # trajectories file.
-                            if data.get("discarded"):
-                                tombstone_entries += 1
-                                continue
+        from utils import atomic_replace
+        tmp_combined_file = combined_file.with_name(f".{combined_file.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with open(tmp_combined_file, 'w', encoding='utf-8') as outfile:
+                for batch_file in all_batch_files:
+                    batch_files_found += 1
+                    batch_num = batch_file.stem.split("_")[1]  # Extract batch number for logging
+                    
+                    with open(batch_file, 'r', encoding='utf-8') as infile:
+                        for line in infile:
+                            total_entries += 1
+                            try:
+                                data = json.loads(line)
 
-                            tool_stats = data.get('tool_stats', {})
-                            
-                            # Check for invalid tool names (model hallucinations)
-                            invalid_tools = [k for k in tool_stats if k not in VALID_TOOLS]
-                            
-                            if invalid_tools:
+                                # Discard tombstones are resume bookkeeping, not
+                                # training data (#93527) — never enter the merged
+                                # trajectories file.
+                                if data.get("discarded"):
+                                    tombstone_entries += 1
+                                    continue
+
+                                tool_stats = data.get('tool_stats', {})
+                                
+                                # Check for invalid tool names (model hallucinations)
+                                invalid_tools = [k for k in tool_stats if k not in VALID_TOOLS]
+                                
+                                if invalid_tools:
+                                    filtered_entries += 1
+                                    invalid_preview = invalid_tools[0][:50] + "..." if len(invalid_tools[0]) > 50 else invalid_tools[0]
+                                    print(f"   ⚠️  Filtering corrupted entry (batch {batch_num}): invalid tool '{invalid_preview}'")
+                                    continue
+                                
+                                outfile.write(line)
+                            except json.JSONDecodeError:
                                 filtered_entries += 1
-                                invalid_preview = invalid_tools[0][:50] + "..." if len(invalid_tools[0]) > 50 else invalid_tools[0]
-                                print(f"   ⚠️  Filtering corrupted entry (batch {batch_num}): invalid tool '{invalid_preview}'")
-                                continue
-                            
-                            outfile.write(line)
-                        except json.JSONDecodeError:
-                            filtered_entries += 1
-                            print(f"   ⚠️  Filtering invalid JSON entry (batch {batch_num})")
+                                print(f"   ⚠️  Filtering invalid JSON entry (batch {batch_num})")
+            atomic_replace(tmp_combined_file, combined_file)
+        except Exception:
+            try:
+                tmp_combined_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
         
         if filtered_entries > 0:
             print(f"⚠️  Filtered {filtered_entries} corrupted entries out of {total_entries} total")
@@ -1142,8 +1157,8 @@ class BatchRunner:
             ),
         }
         
-        with open(self.stats_file, 'w', encoding='utf-8') as f:
-            json.dump(final_stats, f, indent=2, ensure_ascii=False)
+        from utils import atomic_json_write
+        atomic_json_write(self.stats_file, final_stats)
         
         # Print summary
         print("\n" + "=" * 70)
@@ -1339,7 +1354,7 @@ def main(
             print(f"💬 Loaded {len(prefill_messages)} prefill messages from {prefill_messages_file}")
         except Exception as e:
             print(f"❌ Error loading prefill messages: {e}")
-            raise SystemExit(1)
+            raise SystemExit(1) from e
 
     # Initialize and run batch runner
     try:
@@ -1372,7 +1387,7 @@ def main(
         print(f"\n❌ Fatal error: {e}")
         if verbose:
             traceback.print_exc()
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
 
 if __name__ == "__main__":

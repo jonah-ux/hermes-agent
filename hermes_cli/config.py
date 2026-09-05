@@ -1269,11 +1269,11 @@ def _set_nested(config, dotted_key: str, value):
                 return
             try:
                 idx = int(part)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as exc:
                 raise TypeError(
                     f"Cannot navigate into list at key {dotted_key!r}: "
                     f"segment {part!r} is not a numeric index"
-                )
+                ) from exc
             current = current[idx]
             i += 1
         elif isinstance(current, dict):

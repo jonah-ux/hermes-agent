@@ -763,7 +763,7 @@ async def upload_task_attachment(
         except HTTPException:
             raise
         except OSError as exc:
-            raise HTTPException(status_code=500, detail=f"failed to store attachment: {exc}")
+            raise HTTPException(status_code=500, detail=f"failed to store attachment: {exc}") from exc
 
         att_id = kanban_db.add_attachment(
             conn,
@@ -796,8 +796,8 @@ def download_attachment(attachment_id: int, board: Optional[str] = Query(None)):
         try:
             stored = Path(att.stored_path).resolve()
             stored.relative_to(root)
-        except (ValueError, OSError):
-            raise HTTPException(status_code=404, detail="attachment file unavailable")
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=404, detail="attachment file unavailable") from exc
         if not stored.is_file():
             raise HTTPException(status_code=404, detail="attachment file missing on disk")
         return FileResponse(
@@ -2619,7 +2619,7 @@ async def export_board_endpoint(slug: str, body: ExportBoardBody):
         except OSError as exc:
             raise HTTPException(
                 status_code=500, detail=f"Could not create export directory: {exc}"
-            )
+            ) from exc
         stamp = time.strftime("%Y%m%d-%H%M%S")
         output = str(staging / f"{slug}-{stamp}.tar.gz")
 
@@ -2634,12 +2634,12 @@ async def export_board_endpoint(slug: str, body: ExportBoardBody):
             ),
         )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         log.exception("POST /boards/%s/export failed", slug)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return result
 
 

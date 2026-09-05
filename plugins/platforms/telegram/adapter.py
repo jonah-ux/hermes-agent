@@ -4848,7 +4848,7 @@ class TelegramAdapter(BasePlatformAdapter):
                             f"Telegram initialization timed out after {_max_connect} attempts "
                             f"({_init_timeout:.0f}s each). Check network connectivity to api.telegram.org "
                             f"or set HERMES_TELEGRAM_HTTP_CONNECT_TIMEOUT to a lower value."
-                        )
+                        ) from None
                 except OSError as init_err:
                     rebuild_app = True
                     if _attempt < _max_connect - 1:
@@ -8265,7 +8265,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 )
 
                 def _reset_opened_files() -> None:
-                    for fh in opened_files:
+                    for fh in opened_files:  # noqa: B023 -- opened_files is invoked synchronously within this same loop iteration
                         try:
                             fh.seek(0)
                         except Exception:
